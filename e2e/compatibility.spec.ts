@@ -38,7 +38,12 @@ test("浏览器拒绝 localStorage 时仍能进入首页", async ({ page }) => {
 test("切换明暗主题会同步浏览器主题色", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#07100d");
+  await expect(page.locator("html")).toHaveCSS("background-color", "rgb(7, 16, 13)");
   await page.getByRole("button", { name: "切换到白天版本" }).click();
   await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#f7fbf7");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "day");
+  await expect(page.locator("html")).toHaveCSS("background-color", "rgb(247, 251, 247)");
+  await page.getByRole("button", { name: "切换到黑夜版本" }).click();
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#07100d");
+  await expect(page.locator("html")).toHaveCSS("background-color", "rgb(7, 16, 13)");
 });

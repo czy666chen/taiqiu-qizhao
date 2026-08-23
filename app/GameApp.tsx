@@ -92,6 +92,7 @@ import {
   syncQueueSummary,
 } from "../src/lib/cloud-sync";
 import { reconcileCloudMatches, type CloudMatchSnapshot } from "../src/lib/cloud-reconcile";
+import { createRealtimeCardNotice, type RealtimeCardNotice } from "../src/lib/realtime-card-notice";
 
 const APP_VERSION = "5.3.1";
 
@@ -801,7 +802,7 @@ function eightBallServeMeta(match: EightBallMatch) {
 
 function printEightBall(match: EightBallMatch) {
   const stats = calculateEightBallStats(match); const rounds = getEffectiveEightBallRounds(match);
-  const popup = window.open("", "_blank", "noopener,noreferrer"); if (!popup) return;
+  const popup = window.open("", "_blank"); if (!popup) return; popup.opener = null;
   popup.document.write(`<!doctype html><meta charset="utf-8"><title>中八战绩</title><style>body{font-family:system-ui;padding:32px;color:#17231d}h1{margin-bottom:4px}.score{display:flex;gap:30px;font-size:28px;font-weight:800}table{width:100%;border-collapse:collapse;margin-top:24px}th,td{padding:9px;border-bottom:1px solid #ddd;text-align:left}@media print{button{display:none}}</style><h1>${match.title || "中八双人赛"}</h1><p>${match.location || "未填写地点"} · ${new Date(match.startedAt).toLocaleString("zh-CN")} · ${match.raceTo ? `抢 ${match.raceTo} 局` : "自由局"} · ${eightBallServeMeta(match)}</p><div class="score">${match.players.map((p) => `<span>${p.name} ${stats[p.id].score}</span>`).join("")}</div><table><thead><tr><th>局</th><th>开球</th><th>胜者</th><th>胜法</th><th>犯规</th><th>比分</th><th>用时</th><th>备注</th></tr></thead><tbody>${rounds.map((r, i) => `<tr><td>${i + 1}</td><td>${match.players.find(p => p.id === r.serverId)?.name}</td><td>${match.players.find(p => p.id === r.winnerId)?.name}</td><td>${EIGHT_BALL_WIN_LABELS[r.winType]}</td><td>${match.players.map(p => `${p.name} ${r.fouls[p.id] ?? 0}`).join(" / ")}</td><td>${match.players.map(p => r.after[p.id] ?? 0).join(" : ")}</td><td>${durationLabel(r.confirmedAt-r.startedAt)}</td><td>${r.note}</td></tr>`).join("")}</tbody></table><p>事件 ${match.events.length} 条 · match_version ${match.matchVersion}</p><button onclick="print()">打印 / 另存 PDF</button>`); popup.document.close();
 }
 
@@ -853,7 +854,7 @@ function exportScoreJson(match: BilliardsMatch) {
 }
 
 function printScoreMatch(match: BilliardsMatch) {
-  const timeline = scoreMatchTimeline(match); const popup = window.open("", "_blank", "noopener,noreferrer"); if (!popup) return;
+  const timeline = scoreMatchTimeline(match); const popup = window.open("", "_blank"); if (!popup) return; popup.opener = null;
   popup.document.write(`<!doctype html><meta charset="utf-8"><title>追分战绩</title><style>body{font-family:system-ui;padding:32px;color:#17231d}h1{margin-bottom:4px}.score{display:flex;gap:24px;font-size:24px;font-weight:800}table{width:100%;border-collapse:collapse;margin-top:24px}th,td{padding:9px;border-bottom:1px solid #ddd;text-align:left}@media print{button{display:none}}</style><h1>${match.mode === "cards" ? "奇招卡牌局" : "追分战绩"}</h1><p>${new Date(match.startedAt).toLocaleString("zh-CN")} · ${formatDuration(match.startedAt, match.endedAt)}</p><div class="score">${getRankings(match).map((p, i) => `<span>${i + 1}. ${p.name} ${p.score} 分（开局 ${p.initialScore}）</span>`).join("")}</div><table><thead><tr><th>时间</th><th>类型</th><th>玩家</th><th>事件</th><th>变化 / 卡牌</th><th>备注</th><th>关联</th></tr></thead><tbody>${timeline.map((e) => `<tr><td>${new Date(e.at).toLocaleTimeString("zh-CN")}</td><td>${e.kind}</td><td>${e.player}</td><td>${e.label}</td><td>${e.detail}</td><td>${e.note}</td><td>${e.linkedId ?? ""}</td></tr>`).join("")}</tbody></table><button onclick="print()">打印 / 另存 PDF</button>`); popup.document.close();
 }
 
@@ -1247,6 +1248,7 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
   const [kicked, setKicked] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [cardNotice, setCardNotice] = useState<RealtimeCardNotice | null>(null);
   const [selectedSeatId, setSelectedSeatId] = useState("");
   const [claimTargets, setClaimTargets] = useState<Record<string, string>>({});
   const socketRef = useRef<WebSocket | null>(null);
@@ -1256,6 +1258,14 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
   useEffect(() => {
     snapshotRef.current = snapshot;
   }, [snapshot]);
+
+  useEffect(() => {
+    if (!cardNotice) return;
+    const timer = window.setTimeout(() => setCardNotice(null), 4_500);
+    const dismissOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setCardNotice(null); };
+    window.addEventListener("keydown", dismissOnEscape);
+    return () => { window.clearTimeout(timer); window.removeEventListener("keydown", dismissOnEscape); };
+  }, [cardNotice]);
 
   const loadMatches = async () => {
     try {
@@ -1351,6 +1361,13 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
           };
           if (payload.type === "snapshot" && payload.snapshot) mergeSnapshot(payload.snapshot, payload.reset !== false);
           if (payload.type === "event") {
+            const notice = payload.event && createRealtimeCardNotice(payload.event as { kind?: string; payload?: Record<string, unknown> }, (playerId) => {
+              const current = snapshotRef.current;
+              return current?.chaseScore?.players.find((player) => player.id === playerId)?.nickname
+                ?? current?.eightBall?.players.find((player) => player.id === playerId)?.nickname
+                ?? playerId;
+            });
+            if (notice) setCardNotice(notice);
             void refreshRoom(activeCode).catch(() => socket.close(1012, "refresh failed"));
             // Convergence rule: when the server changes OUR role, fetch the latest
             // snapshot and reconnect immediately (skipping backoff) so the write
@@ -1362,7 +1379,17 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
             }
           }
           if (payload.type === "command-result") {
-            if (payload.result?.ok) { setMessage(payload.result.event?.kind === "card.round_redealt" ? "新一轮手牌已更新" : "操作已由服务器确认"); void refreshRoom(activeCode); }
+            if (payload.result?.ok) {
+              const notice = payload.result.event && createRealtimeCardNotice(payload.result.event as { kind?: string; payload?: Record<string, unknown> }, (playerId) => {
+                const current = snapshotRef.current;
+                return current?.chaseScore?.players.find((player) => player.id === playerId)?.nickname
+                  ?? current?.eightBall?.players.find((player) => player.id === playerId)?.nickname
+                  ?? playerId;
+              });
+              if (notice) setCardNotice(notice);
+              setMessage(payload.result.event?.kind === "card.round_redealt" ? "新一轮手牌已更新" : "操作已由服务器确认");
+              void refreshRoom(activeCode);
+            }
             else setMessage(payload.result?.code === "version_conflict" ? "版本已变化，正在刷新，请重试刚才的操作" : "实时命令未执行，请检查当前状态");
           }
         } catch { /* Ignore malformed server frames; reconnect sync repairs state. */ }
@@ -1688,6 +1715,14 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
   const connectionLabel = ({ idle: "未连接", connecting: "连接中", connected: "已同步", disconnected: "已断开" } as const)[connection];
 
   return <div className="room-page page-shell">
+    {cardNotice && <div className="card-notice-backdrop" onClick={() => setCardNotice(null)}>
+      <section className={`card-notice ${cardNotice.action}`} role="status" aria-live="polite" aria-atomic="true" onClick={(event) => event.stopPropagation()}>
+        <small>{cardNotice.action === "draw" ? "抽取卡牌" : cardNotice.action === "play" ? "使用卡牌" : "安全跳过"}</small>
+        {cardNotice.action === "draw"
+          ? <h2>{cardNotice.playerName}抽取了一张卡牌</h2>
+          : <><h2>{cardNotice.playerName}{cardNotice.action === "play" ? "使用了" : "安全跳过了"}「{cardNotice.card!.title}」</h2><p>{cardNotice.card!.effect}</p></>}
+      </section>
+    </div>}
     {roomCode ? <section className="room-topbar"><div><span className="live-label"><i /> 云端实时对局</span><h1>{snapshot?.chaseScore ? (snapshot.chaseScore.mode === "score_cards" ? "追分 · 奇招牌" : "多人追分") : snapshot?.eightBall ? "中八实时" : "进入房间…"}</h1><p>房间码 {activeCode || roomCode} · {connectionLabel}{snapshot ? ` · 版本 ${snapshot.version}` : ""}</p></div><div className="room-topbar-actions"><button className="secondary" onClick={() => onNavigate("/")}>← 返回</button><button className="secondary" onClick={() => void navigator.clipboard?.writeText(activeCode || roomCode)}>复制房间码</button><button className="secondary" disabled={busy} onClick={() => void refreshRoom()}>刷新状态</button>{snapshot && isHost && snapshot.status !== "completed" && <button className="danger-button" disabled={busy} onClick={() => void completeRoom()}>结束对局</button>}{snapshot && !isHost && snapshot.status !== "completed" && <button className="danger-button" disabled={busy} onClick={() => void leaveRoom()}>离开房间</button>}</div></section> : <header className="page-title"><p className="kicker">REALTIME ROOM</p><h1>多人实时房间</h1><p>创建或加入云端实时房间，全屏共同操作，多人实时同步。</p></header>}
     {roomCode ? (!snapshot ? <section className="room-entering"><p className="kicker">CONNECTING</p><h2>正在进入房间…</h2></section> : <>
       <div className="room-code-card"><div><span>房间码</span><strong>{activeCode}</strong><small>版本 {snapshot.version} · {snapshot.events.length} 条事件{snapshot.status === "completed" ? " · 已结束" : ""}</small></div><button className="secondary" onClick={() => void navigator.clipboard?.writeText(activeCode)}>复制房间码</button></div>

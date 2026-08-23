@@ -31,6 +31,9 @@ test.describe("追分核心流程", () => {
     await expect(page.getByRole("heading", { name: "追分结算" })).toBeVisible();
     await page.reload();
     await expect(page.getByRole("heading", { name: "追分结算" })).toBeVisible();
+    const popupPromise = page.waitForEvent("popup");
+    await page.getByRole("button", { name: "打印 / PDF" }).click();
+    await expect((await popupPromise).getByRole("heading", { name: "追分战绩" })).toBeVisible();
   });
 });
 
@@ -64,6 +67,9 @@ test("R2.5 中八建局、逐局录入、布局切换、恢复与战绩导出", 
   await expect(page.getByRole("button", { name: "战绩长图" })).toBeVisible();
   await expect(page.getByRole("button", { name: "打印 / PDF" })).toBeVisible();
   await expect(page.getByRole("button", { name: "JSON 备份" })).toBeVisible();
+  const popupPromise = page.waitForEvent("popup");
+  await page.getByRole("button", { name: "打印 / PDF" }).click();
+  await expect((await popupPromise).getByRole("heading", { name: "中八双人赛" })).toBeVisible();
 });
 
 test("奇招牌抽取、使用、安全跳过和刷新恢复", async ({ page }) => {

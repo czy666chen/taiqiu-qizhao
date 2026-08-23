@@ -28,10 +28,11 @@ test.describe("多人实时房间全屏化", () => {
       document.body.innerHTML = `
       <section class="realtime-score-players"><div class="realtime-player-slot"><button>玩家</button></div></section>
       <section class="match-section card-board baseline-card-panel"><div class="trick-grid"><article class="trick-card">普通牌</article></div></section>
-      <section class="match-section card-board realtime-card-panel"><div class="trick-grid"><article class="trick-card">实时牌</article></div><div class="realtime-card-actions"><button class="primary compact">抽 1 张</button><button class="secondary compact" disabled>调整下一轮手牌</button></div></section>
+      <section class="match-section card-board realtime-card-panel"><div class="trick-grid"><article class="trick-card"><h3>实时牌</h3><p>允许说明文字自然换成更多行</p><aside>安全提示</aside></article></div><div class="realtime-card-actions"><button class="primary compact">抽 1 张</button><button class="secondary compact" disabled>调整下一轮手牌</button></div></section>
       <section class="card-ledger">流水</section>
       <div class="realtime-rule-grid"><button>普通计分</button></div>
       <details class="realtime-score-tools" open><summary>特殊规则</summary><div class="realtime-tool-grid"><div><button class="realtime-emphasis-button">黑金（双倍）</button></div></div></details>
+      <section class="room-members"><article><span>陈</span><div><b>陈致远</b></div><div class="member-actions"><label>认领到<select><option>玩家 A</option></select></label><button>确认认领</button></div></article></section>
       <section class="room-kicked">已移出的成员</section>
       <div class="realtime-eight-score"><article class="red"><span>甲</span><strong>3</strong><small>普胜 3</small></article></div>
       <div class="eight-scoreboard"><article class="blue"><strong>4</strong></article></div>
@@ -64,8 +65,14 @@ test.describe("多人实时房间全屏化", () => {
     await expect(page.locator(".eight-scoreboard strong")).toHaveCSS("color", "rgb(255, 255, 255)");
     await expect(page.getByRole("button", { name: "结束对局" })).toHaveCSS("background-color", "rgb(227, 74, 88)");
 
-    await page.setViewportSize({ width: 600, height: 900 });
-    await expect(page.locator(".realtime-card-panel .trick-grid")).toHaveCSS("grid-template-columns", /^\d+(\.\d+)?px$/);
-    await expect(page.locator(".realtime-card-panel .trick-card")).toHaveCSS("min-height", "290px");
+    await page.setViewportSize({ width: 375, height: 812 });
+    await expect(page.locator(".realtime-card-panel .trick-grid")).toHaveCSS("grid-template-columns", /^\d+(\.\d+)?px \d+(\.\d+)?px$/);
+    await expect(page.locator(".realtime-card-panel .trick-card")).toHaveCSS("min-height", "340px");
+    await expect(page.locator(".realtime-card-panel .trick-card > p")).toHaveCSS("font-size", "14px");
+    await expect(page.locator(".realtime-card-panel .trick-card aside")).toBeHidden();
+    await expect(page.locator(".room-members .member-actions")).toHaveCSS("grid-column-start", "2");
+    await expect(page.locator(".room-members .member-actions")).toHaveCSS("justify-self", "end");
+    await expect(page.locator(".realtime-eight-score span")).toHaveCSS("font-size", "22px");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 });
