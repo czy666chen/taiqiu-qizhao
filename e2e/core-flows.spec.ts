@@ -64,7 +64,10 @@ test("R2.5 中八建局、逐局录入、布局切换、恢复与战绩导出", 
   await expect(page.locator(".eight-scoreboard article.red > strong")).toHaveText("1");
   await page.getByRole("button", { name: "结束比赛" }).click();
   await page.getByRole("button", { name: "确认结束并保存" }).click();
-  await expect(page.getByRole("button", { name: "战绩长图" })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "日期与逐条时间" })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: "比分走势" })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: "分类统计" })).toBeChecked();
+  await expect(page.getByRole("button", { name: "保存竖版长图" })).toBeVisible();
   await expect(page.getByRole("button", { name: "打印 / PDF" })).toBeVisible();
   await expect(page.getByRole("button", { name: "JSON 备份" })).toBeVisible();
   const popupPromise = page.waitForEvent("popup");
