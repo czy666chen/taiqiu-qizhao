@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import "./admin.css";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://hei8chouka.vercel.app"),

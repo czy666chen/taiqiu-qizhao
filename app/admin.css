@@ -1,0 +1,128 @@
+.admin-root { --admin-bg: #f7fbf7; --admin-panel: #ffffff; --admin-line: #dbe9df; --admin-text: #102019; --admin-muted: #60726a; --admin-mint: #16834a; --admin-gold: #9a6900; min-height: 100vh; color: var(--admin-text); background: radial-gradient(circle at 78% 0, rgba(22, 131, 74, .16) 0, transparent 30rem), var(--admin-bg); font-family: Inter, "Microsoft YaHei", sans-serif; }
+.admin-root button, .admin-root input, .admin-root select, .admin-login-shell button, .admin-login-shell input { font: inherit; }
+.admin-root button, .admin-login-shell button { cursor: pointer; }
+.admin-root button:focus-visible, .admin-root input:focus-visible, .admin-root select:focus-visible, .admin-root a:focus-visible, .admin-login-shell button:focus-visible, .admin-login-shell input:focus-visible, .admin-login-shell a:focus-visible { outline: 2px solid var(--admin-mint, #79f5bd); outline-offset: 3px; }
+.admin-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.admin-skip { position: fixed; z-index: 100; top: -60px; left: 16px; padding: 10px 14px; color: #ffffff; background: var(--admin-mint); border-radius: 6px; }
+.admin-skip:focus { top: 16px; }
+.admin-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 10; display: flex; width: 228px; padding: 28px 22px; flex-direction: column; border-right: 1px solid var(--admin-line); background: rgba(255, 255, 255, .94); backdrop-filter: blur(18px); }
+.admin-brand { display: flex; gap: 12px; align-items: center; padding: 0; border: 0; color: var(--admin-text); background: transparent; text-align: left; }
+.admin-brand > span { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 50%; color: #ffffff; background: var(--admin-mint); font: 900 22px Georgia, serif; box-shadow: 0 8px 24px rgba(21, 78, 45, .14); }
+.admin-brand div, .admin-account div { display: grid; gap: 2px; }
+.admin-brand b { letter-spacing: .08em; }
+.admin-brand small, .admin-account small { color: var(--admin-muted); font-size: 11px; }
+.admin-sidebar nav { display: grid; gap: 8px; margin-top: 54px; }
+.admin-sidebar nav button { min-height: 44px; padding: 0 14px; border: 1px solid transparent; border-radius: 8px; color: var(--admin-muted); background: transparent; text-align: left; }
+.admin-sidebar nav button:hover, .admin-sidebar nav button.active { border-color: #a9cdb5; color: var(--admin-mint); background: #edf8f1; }
+.admin-account { display: grid; grid-template-columns: 34px 1fr auto; gap: 9px; align-items: center; margin-top: auto; padding-top: 20px; border-top: 1px solid var(--admin-line); }
+.admin-account > span { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 50%; color: #4d3400; background: #f3cc72; font-weight: 900; }
+.admin-account button { border: 0; color: var(--admin-muted); background: transparent; font-size: 11px; }
+.admin-mobile-bar { display: none; }
+.admin-content { min-height: 100vh; margin-left: 228px; padding: 58px clamp(24px, 5vw, 76px) 80px; }
+.admin-page { width: min(1180px, 100%); margin: 0 auto; }
+.admin-page-heading { display: flex; gap: 24px; align-items: end; justify-content: space-between; margin-bottom: 28px; }
+.admin-page-heading h1, .admin-detail-heading h1 { margin: 3px 0 0; font: 800 clamp(30px, 4vw, 48px)/1.05 Georgia, "Microsoft YaHei", serif; letter-spacing: -.03em; }
+.admin-page-heading p, .admin-detail-heading p { margin: 7px 0 0; color: var(--admin-muted); }
+.admin-page-heading > span { color: var(--admin-muted); font-size: 12px; }
+.admin-eyebrow { margin: 0 !important; color: var(--admin-mint) !important; font: 800 10px/1.2 ui-monospace, monospace; letter-spacing: .18em; }
+.admin-muted { color: var(--admin-muted); }
+.admin-filters { display: grid; grid-template-columns: minmax(220px, 1fr) 180px auto; gap: 12px; align-items: end; margin-bottom: 24px; padding: 16px; border: 1px solid var(--admin-line); border-radius: 12px; background: rgba(255, 255, 255, .9); }
+.admin-filters.matches { grid-template-columns: minmax(200px, 1fr) 180px 160px auto; }
+.admin-filters label, .admin-dialog label { display: grid; gap: 7px; color: var(--admin-muted); font-size: 11px; font-weight: 700; }
+.admin-filters input, .admin-filters select, .admin-dialog input, .admin-login-card input { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid #c5dccd; border-radius: 7px; color: var(--admin-text); background: #ffffff; }
+.admin-primary, .admin-danger, .admin-quiet, .admin-more { min-height: 44px; padding: 0 16px; border-radius: 7px; font-weight: 800; }
+.admin-primary { border: 1px solid var(--admin-mint); color: #ffffff; background: var(--admin-mint); }
+.admin-primary:disabled, .admin-danger:disabled { cursor: not-allowed; opacity: .45; }
+.admin-danger { border: 1px solid #c83d49; color: #ffffff; background: #c83d49; }
+.admin-quiet { border: 1px solid #c5dccd; color: var(--admin-text); background: #f7fbf8; }
+.admin-error, .admin-warning { padding: 11px 13px; border: 1px solid #efb8bd; border-radius: 7px; color: #9b2833; background: #fff3f4; font-size: 12px; }
+.admin-empty, .admin-loading { padding: 42px; color: var(--admin-muted); text-align: center; }
+.admin-table-wrap { overflow-x: auto; border: 1px solid var(--admin-line); border-radius: 12px; background: #ffffff; }
+.admin-table { width: 100%; border-collapse: collapse; white-space: nowrap; }
+.admin-table th { padding: 13px 16px; color: var(--admin-muted); background: #f1faf4; font-size: 10px; letter-spacing: .08em; text-align: left; }
+.admin-table td { padding: 15px 16px; border-top: 1px solid var(--admin-line); color: #30483e; font-size: 12px; }
+.admin-link { display: grid; gap: 4px; padding: 0; border: 0; color: var(--admin-text); background: transparent; text-align: left; }
+.admin-link b { font-size: 13px; }
+.admin-link small { color: var(--admin-muted); }
+.admin-status, .admin-mode, .admin-live { display: inline-flex; width: max-content; padding: 4px 8px; border-radius: 999px; color: #426153; background: #edf4ef; font-size: 9px; font-weight: 800; }
+.admin-status.active, .admin-status.success, .admin-status.completed { color: #116c3c; background: #dff5e7; }
+.admin-status.disabled, .admin-status.cancelled, .admin-status.failure { color: #835600; background: #fff0ce; }
+.admin-status.deleted { color: #a72f3a; background: #ffe5e7; }
+.admin-more { display: block; margin: 20px auto 0; border: 1px solid #c5dccd; color: var(--admin-text); background: #f7fbf8; }
+.admin-back { min-height: 40px; margin-bottom: 26px; padding: 0; border: 0; color: var(--admin-mint); background: transparent; }
+.admin-detail-heading { display: flex; gap: 16px; align-items: center; margin-bottom: 28px; }
+.admin-detail-heading > .admin-status { margin-left: auto; }
+.admin-avatar { display: grid; width: 64px; height: 64px; place-items: center; border: 1px solid #a9cdb5; border-radius: 50%; color: var(--admin-mint); background: #edf8f1; font: 800 26px Georgia, serif; }
+.admin-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 18px; }
+.admin-metrics article { display: grid; gap: 10px; padding: 18px; border: 1px solid var(--admin-line); border-radius: 10px; background: var(--admin-panel); }
+.admin-metrics small { color: var(--admin-muted); }
+.admin-metrics strong { font: 800 18px/1.3 Georgia, "Microsoft YaHei", serif; }
+.admin-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 22px; }
+.admin-panel { padding: 20px; border: 1px solid var(--admin-line); border-radius: 12px; background: rgba(255, 255, 255, .92); }
+.admin-panel h2 { margin: 0 0 16px; font: 800 18px Georgia, "Microsoft YaHei", serif; }
+.admin-record { display: flex; width: 100%; min-height: 58px; padding: 11px 0; align-items: center; justify-content: space-between; gap: 12px; border: 0; border-top: 1px solid var(--admin-line); color: var(--admin-text); background: transparent; text-align: left; }
+.admin-record span:first-child { display: grid; gap: 4px; }
+.admin-record small { color: var(--admin-muted); }
+.admin-match-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.admin-match-list > button { display: grid; gap: 10px; min-width: 0; padding: 20px; border: 1px solid var(--admin-line); border-radius: 12px; color: var(--admin-text); background: linear-gradient(145deg, #ffffff, #f1faf4); text-align: left; transition: border-color .15s ease, transform .15s ease; }
+.admin-match-list > button:hover { border-color: #a9cdb5; transform: translateY(-1px); }
+.admin-match-list > button > div { display: flex; gap: 6px; }
+.admin-match-list h2 { overflow: hidden; margin: 0; font: 800 18px Georgia, "Microsoft YaHei", serif; text-overflow: ellipsis; white-space: nowrap; }
+.admin-match-list p, .admin-match-list code { overflow: hidden; margin: 0; color: var(--admin-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.admin-mode { color: #835600; background: #fff0ce; }
+.admin-live { color: #196399; background: #e2f2ff; }
+.admin-score-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.admin-score-grid article { display: grid; gap: 6px; padding: 18px; border: 1px solid var(--admin-line); border-radius: 12px; background: var(--admin-panel); }
+.admin-score-grid small, .admin-score-grid span { color: var(--admin-muted); font-size: 10px; }
+.admin-score-grid strong { color: var(--admin-mint); font: 800 38px Georgia, serif; }
+.admin-timeline { display: grid; grid-template-columns: 28px 1fr; gap: 10px; padding: 10px 0; border-top: 1px solid var(--admin-line); }
+.admin-timeline > span { display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; color: #4d3400; background: #f3cc72; font-size: 9px; font-weight: 800; }
+.admin-timeline div { display: grid; gap: 4px; }
+.admin-timeline small { color: var(--admin-muted); }
+.admin-snapshot { margin-top: 18px; border: 1px solid var(--admin-line); border-radius: 10px; background: #f7fbf8; }
+.admin-snapshot summary { padding: 16px; cursor: pointer; color: var(--admin-gold); font-weight: 800; }
+.admin-snapshot pre { max-height: 480px; margin: 0; padding: 16px; overflow: auto; border-top: 1px solid var(--admin-line); color: #30483e; font-size: 11px; white-space: pre-wrap; }
+.admin-dialog { width: min(500px, calc(100% - 40px)); max-height: calc(100vh - 40px); padding: 24px; overflow-y: auto; border: 1px solid #a9cdb5; border-radius: 14px; color: var(--admin-text); background: #ffffff; box-shadow: 0 24px 70px rgba(21, 78, 45, .18); }
+.admin-dialog::backdrop { background: rgba(16, 32, 25, .36); backdrop-filter: blur(8px); }
+.admin-dialog h2 { margin: 0 0 18px; font: 800 24px Georgia, "Microsoft YaHei", serif; }
+.admin-dialog form { display: grid; gap: 13px; }
+.admin-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.admin-password-result { display: grid; gap: 14px; }
+.admin-password-result code { padding: 18px; border: 1px dashed #c38a17; border-radius: 8px; color: #704a00; background: #fff9e9; font-size: 19px; text-align: center; letter-spacing: .08em; }
+.admin-checkbox { display: flex !important; min-height: 44px; align-items: center; grid-template-columns: auto 1fr; }
+.admin-checkbox input { width: 18px; min-height: 18px; }
+.admin-login-shell { --admin-bg: #f7fbf7; --admin-text: #102019; --admin-muted: #60726a; --admin-mint: #16834a; display: grid; min-height: 100vh; padding: 22px; place-items: center; color: var(--admin-text); background: radial-gradient(circle at 50% 20%, rgba(22, 131, 74, .18) 0, var(--admin-bg) 38rem); font-family: Inter, "Microsoft YaHei", sans-serif; }
+.admin-login-card { width: min(410px, 100%); padding: 38px; border: 1px solid #c5dccd; border-radius: 18px; background: rgba(255, 255, 255, .94); box-shadow: 0 35px 80px rgba(21, 78, 45, .16); }
+.admin-mark { display: grid; width: 54px; height: 54px; margin-bottom: 22px; place-items: center; border-radius: 50%; color: #ffffff; background: var(--admin-mint); font: 900 28px Georgia, serif; }
+.admin-login-card h1 { margin: 7px 0; font: 800 38px Georgia, "Microsoft YaHei", serif; }
+.admin-login-card form { display: grid; gap: 10px; margin: 28px 0 20px; }
+.admin-login-card label { margin-top: 5px; color: var(--admin-muted); font-size: 11px; font-weight: 800; }
+.admin-home-link { padding: 0; border: 0; color: var(--admin-muted); background: transparent; font-size: 11px; text-decoration: underline; }
+
+@media (max-width: 820px) {
+  .admin-sidebar { display: none; }
+  .admin-mobile-bar { position: sticky; z-index: 20; top: 0; display: flex; min-height: 58px; padding: 0 16px; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--admin-line); background: rgba(255, 255, 255, .95); backdrop-filter: blur(16px); }
+  .admin-mobile-brand { min-height: 44px; padding: 0; border: 0; color: var(--admin-mint); background: transparent; font-weight: 900; }
+  .admin-mobile-bar nav { display: flex; gap: 4px; }
+  .admin-mobile-bar button { min-height: 44px; padding: 0 9px; border: 0; color: var(--admin-muted); background: transparent; font-size: 11px; }
+  .admin-content { margin-left: 0; padding: 30px 16px 64px; }
+  .admin-filters, .admin-filters.matches { grid-template-columns: 1fr 1fr; }
+  .admin-filters label:first-child { grid-column: 1 / -1; }
+  .admin-metrics { grid-template-columns: 1fr 1fr; }
+  .admin-detail-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 560px) {
+  .admin-page-heading { align-items: flex-start; flex-direction: column; }
+  .admin-filters, .admin-filters.matches { grid-template-columns: 1fr; }
+  .admin-filters label:first-child { grid-column: auto; }
+  .admin-match-list, .admin-metrics { grid-template-columns: 1fr; }
+  .admin-detail-heading { align-items: flex-start; flex-wrap: wrap; }
+  .admin-detail-heading > .admin-status { margin-left: 80px; }
+  .admin-login-card { padding: 26px 22px; }
+  .admin-dialog-actions { display: grid; grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-root *, .admin-login-shell * { scroll-behavior: auto !important; transition-duration: .01ms !important; }
+}

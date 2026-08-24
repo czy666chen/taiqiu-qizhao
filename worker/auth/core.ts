@@ -116,11 +116,11 @@ export async function verifySecret(provided: string, expected: string): Promise<
   return timingSafeEqual(new Uint8Array(providedHash), new Uint8Array(expectedHash));
 }
 
-export function parseSessionCookie(cookieHeader: string | null): string | null {
+export function parseCookie(cookieHeader: string | null, name: string): string | null {
   if (!cookieHeader) return null;
   for (const part of cookieHeader.split(";")) {
     const separator = part.indexOf("=");
-    if (separator < 0 || part.slice(0, separator).trim() !== SESSION_COOKIE_NAME) continue;
+    if (separator < 0 || part.slice(0, separator).trim() !== name) continue;
     const value = part.slice(separator + 1).trim();
     if (!value) return null;
     try {
@@ -130,4 +130,8 @@ export function parseSessionCookie(cookieHeader: string | null): string | null {
     }
   }
   return null;
+}
+
+export function parseSessionCookie(cookieHeader: string | null): string | null {
+  return parseCookie(cookieHeader, SESSION_COOKIE_NAME);
 }

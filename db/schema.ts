@@ -23,6 +23,7 @@ export const users = sqliteTable(
     displayUsername: text("display_username").notNull(),
     passwordDigest: text("password_digest").notNull(),
     passwordVersion: integer("password_version").notNull().default(1),
+    passwordResetAt: integer("password_reset_at"),
     status: text("status", { enum: ["active", "disabled", "deleted"] })
       .notNull()
       .default("active"),
@@ -199,6 +200,78 @@ export const decks = sqliteTable(
   ],
 );
 
+export const adminUsers = sqliteTable(
+  "admin_users",
+  {
+    id: text("id").primaryKey(),
+    normalizedUsername: text("normalized_username").notNull(),
+    displayUsername: text("display_username").notNull(),
+    passwordDigest: text("password_digest").notNull(),
+    passwordVersion: integer("password_version").notNull().default(1),
+    status: text("status", { enum: ["active", "disabled", "deleted"] })
+      .notNull()
+      .default("active"),
+    lastLoginAt: integer("last_login_at"),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex("admin_users_normalized_username_uq").on(table.normalizedUsername),
+    check("admin_users_id_uuid_length_ck", sql`length(${table.id}) = 36`),
+    check(
+      "admin_users_username_format_ck",
+      sql`length(${table.normalizedUsername}) between 3 and 24
+          and ${table.normalizedUsername} = lower(${table.normalizedUsername})
+          and ${table.normalizedUsername} not glob '*[^a-z0-9_]*'`,
+    ),
+    check("admin_users_password_version_ck", sql`${table.passwordVersion} >= 1`),
+    check("admin_users_status_ck", sql`${table.status} in ('active', 'disabled', 'deleted')`),
+  ],
+);
+
+export const adminSessions = sqliteTable(
+  "admin_sessions",
+  {
+    id: text("id").primaryKey(),
+    adminUserId: text("admin_user_id")
+      .notNull()
+      .references(() => adminUsers.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    tokenDigest: text("token_digest").notNull(),
+    createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
+    lastUsedAt: integer("last_used_at").notNull().default(sql`(unixepoch() * 1000)`),
+    expiresAt: integer("expires_at").notNull(),
+    revokedAt: integer("revoked_at"),
+  },
+  (table) => [
+    uniqueIndex("admin_sessions_token_digest_uq").on(table.tokenDigest),
+    index("admin_sessions_user_expires_idx").on(table.adminUserId, table.expiresAt),
+    check("admin_sessions_id_uuid_length_ck", sql`length(${table.id}) = 36`),
+  ],
+);
+
+export const adminAuditEvents = sqliteTable(
+  "admin_audit_events",
+  {
+    id: text("id").primaryKey(),
+    adminUserId: text("admin_user_id").references(() => adminUsers.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    action: text("action").notNull(),
+    targetType: text("target_type"),
+    targetId: text("target_id"),
+    outcome: text("outcome", { enum: ["success", "failure"] }).notNull(),
+    requestId: text("request_id").notNull(),
+    metadataJson: text("metadata_json").notNull().default("{}"),
+    createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    index("admin_audit_created_idx").on(table.createdAt),
+    index("admin_audit_user_created_idx").on(table.adminUserId, table.createdAt),
+    check("admin_audit_metadata_json_ck", sql`json_valid(${table.metadataJson})`),
+    check("admin_audit_outcome_ck", sql`${table.outcome} in ('success', 'failure')`),
+  ],
+);
+
 export const customCards = sqliteTable(
   "custom_cards",
   {
@@ -314,6 +387,9 @@ export const matches = sqliteTable(
     endedAt: integer("ended_at"),
   },
   (table) => [
+    index("matches_created_idx").on(table.createdAt),
+    index("matches_status_created_idx").on(table.status, table.createdAt),
+    index("matches_owner_created_idx").on(table.ownerUserId, table.createdAt),
     index("matches_owner_ended_idx").on(table.ownerUserId, table.endedAt),
     index("matches_lease_idx").on(table.writeLeaseDeviceId, table.writeLeaseExpiresAt),
     check("matches_status_ck", sql`${table.status} in ('draft', 'active', 'completed', 'cancelled')`),

@@ -3,6 +3,7 @@ import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } fr
 import handler from "vinext/server/app-router-entry";
 import { handleApiRequest, type AuthEnv } from "./auth/api";
 import { handleBusinessApiRequest } from "./business/api";
+import { handleAdminApiRequest } from "./admin/api";
 import { handleRealtimeApiRequest, type RealtimeEnv } from "./realtime/api";
 
 export { MatchRoom } from "./realtime/match-room";
@@ -36,6 +37,10 @@ const worker = {
 
     if (url.pathname.startsWith("/api/auth/") || url.pathname === "/api/profile" || url.pathname.startsWith("/api/account")) {
       return handleApiRequest(request, env);
+    }
+
+    if (url.pathname.startsWith("/api/admin/")) {
+      return handleAdminApiRequest(request, env);
     }
 
     if (url.pathname.startsWith("/api/realtime/")) {
@@ -87,8 +92,11 @@ const worker = {
     ctx.waitUntil(env.DB.batch([
       env.DB.prepare("DELETE FROM sync_receipts WHERE received_at < ?1").bind(now - 30 * 24 * 60 * 60 * 1000),
       env.DB.prepare("DELETE FROM auth_audit_events WHERE created_at < ?1").bind(now - 180 * 24 * 60 * 60 * 1000),
+      env.DB.prepare("DELETE FROM admin_audit_events WHERE created_at < ?1").bind(now - 180 * 24 * 60 * 60 * 1000),
       env.DB.prepare("DELETE FROM match_audit_events WHERE created_at < ?1").bind(now - 180 * 24 * 60 * 60 * 1000),
       env.DB.prepare("DELETE FROM sessions WHERE revoked_at IS NOT NULL AND revoked_at < ?1").bind(now - 30 * 24 * 60 * 60 * 1000),
+      env.DB.prepare("DELETE FROM admin_sessions WHERE expires_at < ?1 OR (revoked_at IS NOT NULL AND revoked_at < ?2)")
+        .bind(now, now - 30 * 24 * 60 * 60 * 1000),
     ]));
   },
 };

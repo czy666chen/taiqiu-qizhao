@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import AdminApp from "./AdminApp";
 import { CARD_DEFINITIONS, CardCategory } from "../src/data/cards";
 import { getOfficialDeck, officialDeckCardCount, OfficialDeckId } from "../src/lib/official-decks";
 import type { DeckSnapshot } from "../src/lib/custom-decks";
@@ -2164,6 +2165,10 @@ export default function GameApp() {
     setPath(next);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
+
+  if (path === "/admin" || path.startsWith("/admin/")) {
+    return <AdminApp path={path} navigate={navigate} />;
+  }
 
   const enterCloudRoom = (code: string) => {
     // Opening a room now navigates to its full-screen page; the same

@@ -1,6 +1,6 @@
 {
   "name": "taiqiu-qizhao",
-  "version": "6.0.0",
+  "version": "6.1.0",
   "description": "面向台球朋友局的中八、多人追分、奇招牌与实时房间应用",
   "license": "MIT",
   "repository": {
@@ -22,8 +22,8 @@
     "build:preview": "cross-env CLOUDFLARE_ENV=preview vinext build",
     "build:production": "cross-env CLOUDFLARE_ENV=production vinext build",
     "build:static": "vite build --config vite.static.config.ts",
-    "deploy:preview": "npm run build:preview && wrangler deploy",
-    "deploy:production": "npm run build:production && wrangler deploy",
+    "deploy:preview": "npm run build:preview && wrangler deploy --env preview",
+    "deploy:production": "npm run build:production && wrangler deploy --env production",
     "start": "vinext start",
     "test": "vitest run --config vitest.config.ts",
     "test:worker": "cross-env WRANGLER_WRITE_LOGS=false WRANGLER_LOG_PATH=.wrangler/logs XDG_CONFIG_HOME=.wrangler/xdg vitest run --config vitest.worker.config.ts",
@@ -33,9 +33,11 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply DB --local --env local",
     "db:migrate:preview": "wrangler d1 migrations apply hei8-r3-preview --remote --env preview",
-    "db:migrate:production": "wrangler d1 migrations apply hei8-r3-production --remote --env production",
+    "db:migrate:production": "wrangler d1 migrations apply hei8-r3-production-v2 --remote --env production",
     "db:check:local": "wrangler d1 execute DB --local --env local --command \"PRAGMA foreign_key_check; PRAGMA quick_check;\"",
     "security:scan": "node scripts/scan-secrets.mjs",
+    "admin:create": "node scripts/create-admin.mjs",
+    "admin:reset-password": "node scripts/reset-admin-password.mjs",
     "auth:reset-password": "node scripts/reset-password.mjs"
   },
   "dependencies": {

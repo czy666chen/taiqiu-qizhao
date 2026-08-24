@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import GameApp from "../app/GameApp";
 import "../app/globals.css";
+import "../app/admin.css";
 
 const root = document.getElementById("root");
 
