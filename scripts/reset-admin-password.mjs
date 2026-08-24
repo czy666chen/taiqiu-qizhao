@@ -2,6 +2,7 @@ import { createHmac, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline";
 import { Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
 const environment = args.includes("--env") ? args[args.indexOf("--env") + 1] : "";
@@ -25,17 +26,18 @@ function readHidden(prompt) {
 }
 
 function runWrangler(database, sql) {
-  const executable = process.platform === "win32" ? "npx.cmd" : "npx";
+  const wrangler = fileURLToPath(new URL("../node_modules/wrangler/bin/wrangler.js", import.meta.url));
   const result = spawnSync(
-    executable,
-    ["wrangler", "d1", "execute", database, "--remote", "--env", environment, "--json", "--command", sql],
+    process.execPath,
+    [wrangler, "d1", "execute", database, "--remote", "--env", environment, "--json", "--command", sql],
     {
       cwd: process.cwd(),
       encoding: "utf8",
       env: { ...process.env, WRANGLER_WRITE_LOGS: "false", WRANGLER_LOG_PATH: ".wrangler/logs" },
     },
   );
-  if (result.status !== 0) throw new Error(result.stderr.trim() || "Wrangler command failed");
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(result.stderr?.trim() || result.stdout?.trim() || "Wrangler command failed");
   return JSON.parse(result.stdout);
 }
 

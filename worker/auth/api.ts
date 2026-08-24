@@ -416,7 +416,9 @@ async function exportAccount(request: Request, env: AuthEnv): Promise<Response> 
     cardEvents: cardEvents.results,
     contacts: contacts.results,
   };
-  return json(body, 200, { "Content-Disposition": `attachment; filename="hei8-account-${session.user.public_code}.json"` });
+  const headers = responseHeaders();
+  headers.set("Content-Disposition", `attachment; filename="hei8-account-${session.user.public_code}.json"`);
+  return new Response(JSON.stringify(body, null, 2), { status: 200, headers });
 }
 
 async function deleteAccount(request: Request, env: AuthEnv, requestId: string): Promise<Response> {

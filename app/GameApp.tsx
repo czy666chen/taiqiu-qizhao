@@ -5,6 +5,7 @@ import AdminApp from "./AdminApp";
 import { CARD_DEFINITIONS, CardCategory } from "../src/data/cards";
 import { getOfficialDeck, officialDeckCardCount, OfficialDeckId } from "../src/lib/official-decks";
 import type { DeckSnapshot } from "../src/lib/custom-decks";
+import { buildPdf, canvasJpeg, parseMatchReport, renderReportCanvas, splitReportCanvas } from "../src/lib/json-report";
 import {
   addMatchPlayer,
   applyBlackGoldScore,
@@ -485,7 +486,7 @@ function SetupDialog({ initialMode, savedRules, scorePresets, onClose, onStart, 
             )}
 
             <section className="setup-section">
-              <div className="setup-title"><span>{scoreEnabled ? "03" : "02"}</span><div><b>奇招牌</b><small>选择不抽牌或为每位玩家启用独立手牌</small></div></div>
+              <div className="setup-title"><span>{scoreEnabled ? "03" : "02"}</span><div><b>奇招牌</b></div></div>
               <div className="segmented card-mode-picker">
                 <button className={cardMode === "none" ? "active" : ""} onClick={() => setCardMode("none")}>不抽牌</button>
                 <button className={cardMode === "independent" ? "active" : ""} onClick={() => setCardMode("independent")}>独立手牌</button>
@@ -845,7 +846,7 @@ function EightBallSetupDialog({ defaultLayout, onClose, onStart, user, onCloudRo
             </div>
           </section>
           <section className="setup-section">
-            <div className="setup-title"><span>01</span><div><b>双方选手</b><small>稳定选手 ID，不受比赛中改名影响</small></div></div>
+            <div className="setup-title"><span>01</span><div><b>双方选手</b></div></div>
             <div className="player-inputs">
               {names.map((name, index) => (
                 <label className="player-input" key={index}>
@@ -873,7 +874,7 @@ function EightBallSetupDialog({ defaultLayout, onClose, onStart, user, onCloudRo
             </div>
           </section>
           <section className="setup-section">
-            <div className="setup-title"><span>04</span><div><b>奇招牌</b><small>选择不抽牌或为双方启用独立手牌</small></div></div>
+            <div className="setup-title"><span>04</span><div><b>奇招牌</b></div></div>
             <div className="segmented card-mode-picker">
               <button className={cardMode === "none" ? "active" : ""} onClick={() => setCardMode("none")}>不抽牌</button>
               <button className={cardMode === "independent" ? "active" : ""} onClick={() => setCardMode("independent")}>独立手牌</button>
@@ -918,7 +919,8 @@ function reportStyles() { return `<style>.title{font:800 42px system-ui,'Noto Sa
 function reportHeader(title: string, subtitle: string, startedAt: number, options: ReportOptions) { return `<rect width="900" height="100%" fill="#07110d"/><circle cx="830" cy="20" r="180" fill="#123325"/><circle cx="860" cy="5" r="110" fill="#17432f"/>${options.time ? `<text x="50" y="58" class="date">${reportDate(startedAt)}</text><text x="52" y="86" class="meta">${new Date(startedAt).getFullYear()} · ${reportClock(startedAt)}</text>` : ""}<text x="50" y="145" class="title">${escapeMarkup(title)}</text><text x="50" y="180" class="meta">${escapeMarkup(subtitle)}</text><line x1="50" y1="208" x2="850" y2="208" stroke="#315445"/>`; }
 function reportChart(series: Array<{ name: string; values: number[] }>, y: number) { const x=62,w=776,h=180,all=series.flatMap((item)=>item.values),min=Math.min(...all,0),range=Math.max(1,Math.max(...all,1)-min); const points=(values:number[])=>values.map((value,index)=>`${x+index*w/Math.max(1,values.length-1)},${y+h-(value-min)/range*h}`).join(" "); return `<rect x="44" y="${y-38}" width="812" height="282" rx="20" fill="#10211a" stroke="#28483a"/><text x="66" y="${y-8}" class="section">比分走势</text>${[0,1,2,3].map((i)=>`<line x1="${x}" y1="${y+i*h/3}" x2="${x+w}" y2="${y+i*h/3}" stroke="#28483a" stroke-dasharray="5 7"/>`).join("")}${series.map((item,i)=>`<polyline points="${points(item.values)}" fill="none" stroke="${REPORT_COLORS[i]}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><text x="${66+(i%4)*190}" y="${y+207+Math.floor(i/4)*24}" class="legend" fill="${REPORT_COLORS[i]}">● ${escapeMarkup(item.name)}</text>`).join("")}`; }
 function openReportPdf(svg: string, title: string) { const popup=window.open("","_blank"); if(!popup)return; popup.opener=null; popup.document.write(`<!doctype html><meta charset="utf-8"><title>${escapeMarkup(title)}</title><style>@page{size:A4 portrait;margin:10mm}body{margin:0;background:#dce7e0}.sheet{width:190mm;margin:12px auto;box-shadow:0 12px 40px #0004}.sheet svg{display:block;width:100%;height:auto}.a11y{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.print{position:fixed;right:20px;bottom:20px;padding:12px 18px;border:0;border-radius:8px;background:#76e6ad;font-weight:800}@media print{body{background:#fff}.sheet{width:100%;margin:0;box-shadow:none}.print{display:none}}</style><h1 class="a11y">${escapeMarkup(title)}</h1><div class="sheet">${svg}</div><button class="print" onclick="print()">打印 / 另存 PDF</button>`); popup.document.close(); }
-function ReportControls({ options, onChange, onImage, onPdf }: { options: ReportOptions; onChange: (options: ReportOptions) => void; onImage: () => void; onPdf: () => void }) { const toggle=(key:keyof ReportOptions)=>onChange({...options,[key]:!options[key]}); return <div className="report-controls"><div className="report-options" aria-label="导出内容"><label><input type="checkbox" checked={options.time} onChange={()=>toggle("time")} /> 日期与逐条时间</label><label><input type="checkbox" checked={options.trend} onChange={()=>toggle("trend")} /> 比分走势</label><label><input type="checkbox" checked={options.stats} onChange={()=>toggle("stats")} /> 分类统计</label></div><div className="export-actions"><button onClick={onImage}>保存竖版长图</button><button onClick={onPdf}>打印 / PDF</button></div></div>; }
+function ReportOptionFields({ options, onChange }: { options: ReportOptions; onChange: (options: ReportOptions) => void }) { const toggle=(key:keyof ReportOptions)=>onChange({...options,[key]:!options[key]}); return <div className="report-options" aria-label="导出内容"><label><input type="checkbox" checked={options.time} onChange={()=>toggle("time")} /> 日期与逐条时间</label><label><input type="checkbox" checked={options.trend} onChange={()=>toggle("trend")} /> 比分走势</label><label><input type="checkbox" checked={options.stats} onChange={()=>toggle("stats")} /> 分类统计</label></div>; }
+function ReportControls({ options, onChange, onImage, onPdf }: { options: ReportOptions; onChange: (options: ReportOptions) => void; onImage: () => void; onPdf: () => void }) { return <div className="report-controls"><ReportOptionFields options={options} onChange={onChange} /><div className="export-actions"><button onClick={onImage}>保存竖版长图</button><button onClick={onPdf}>打印 / PDF</button></div></div>; }
 function exportEightBallJson(match: EightBallMatch) {
   const payload = { exportVersion: 1, exportedAt: new Date().toISOString(), match, effectiveRounds: getEffectiveEightBallRounds(match), stats: calculateEightBallStats(match) };
   downloadText(`中八战绩-${match.id}.json`, JSON.stringify(payload, null, 2), "application/json");
@@ -1068,7 +1070,7 @@ function LocalMigrationPanel() {
     } catch (error) { setMessage(error instanceof Error ? error.message : "迁移失败，可保留当前备份后重试"); }
     finally { setBusy(false); }
   };
-  return <section className="migration-panel"><header><p className="kicker">R3 · LOCAL MIGRATION</p><h2>本机数据迁移</h2><p>扫描只读取本机存档；下载完整备份并明确确认前，不会注册设备、上传或修改原始数据。</p></header>{!migration ? <button className="primary" disabled={busy} onClick={scan}>{busy ? "正在扫描…" : "扫描本机数据"}</button> : <><div className="migration-counts"><span><b>{migration.preview.players}</b>玩家</span><span><b>{migration.preview.presets}</b>预设</span><span><b>{migration.preview.decks}</b>牌组</span><span><b>{migration.preview.matches}</b>对局</span><span><b>{migration.preview.eightBallRounds}</b>中八流水</span></div><small className="migration-checksum">备份校验和：{migration.backup.checksum}</small><div className="migration-actions"><button className="secondary" onClick={scan} disabled={busy}>重新扫描</button><button className="secondary" onClick={backup} disabled={busy}>下载完整 JSON 备份</button></div><label className="migration-confirm"><input type="checkbox" checked={confirmed} disabled={!backupDownloaded || busy} onChange={(event) => setConfirmed(event.target.checked)} /><span>我已保存备份，并确认把以上数据迁移到当前登录账号</span></label><button className="primary" disabled={!confirmed || !backupDownloaded || busy || migration.resources.length === 0} onClick={upload}>{busy ? "正在迁移…" : "确认并开始迁…"}</button></>}{message && <p className="migration-message" role="status">{message}</p>}</section>;
+  return <section className="migration-panel"><header><p className="kicker">R3 · LOCAL MIGRATION</p><h2>本机数据迁移</h2></header>{!migration ? <button className="primary" disabled={busy} onClick={scan}>{busy ? "正在扫描…" : "扫描本机数据"}</button> : <><div className="migration-counts"><span><b>{migration.preview.players}</b>玩家</span><span><b>{migration.preview.presets}</b>预设</span><span><b>{migration.preview.decks}</b>牌组</span><span><b>{migration.preview.matches}</b>对局</span><span><b>{migration.preview.eightBallRounds}</b>中八流水</span></div><small className="migration-checksum">备份校验和：{migration.backup.checksum}</small><div className="migration-actions"><button className="secondary" onClick={scan} disabled={busy}>重新扫描</button><button className="secondary" onClick={backup} disabled={busy}>下载完整 JSON 备份</button></div><label className="migration-confirm"><input type="checkbox" checked={confirmed} disabled={!backupDownloaded || busy} onChange={(event) => setConfirmed(event.target.checked)} /><span>我已保存备份，并确认把以上数据迁移到当前登录账号</span></label><button className="primary" disabled={!confirmed || !backupDownloaded || busy || migration.resources.length === 0} onClick={upload}>{busy ? "正在迁移…" : "确认并开始迁…"}</button></>}{message && <p className="migration-message" role="status">{message}</p>}</section>;
 }
 
 function AccountForm({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void }) {
@@ -1933,18 +1935,62 @@ function AccountDataPanel({ onDeleted }: { onDeleted: () => void }) {
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [reportJson, setReportJson] = useState("");
+  const [reportName, setReportName] = useState("战绩报告");
+  const [reportError, setReportError] = useState("");
+  const [reportOptions, setReportOptions] = useState(DEFAULT_REPORT_OPTIONS);
+  const [converting, setConverting] = useState<"" | "png" | "pdf">("");
+  const download = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
   const exportData = async () => {
     setBusy(true); setMessage("");
     try {
       const response = await fetch("/api/account/export");
       if (!response.ok) throw new Error(((await response.json()) as { error?: string }).error ?? "导出失败");
       const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url; anchor.download = `台球奇招-账号数据-${Date.now()}.json`; anchor.click(); URL.revokeObjectURL(url);
+      download(blob, `台球奇招-账号数据-${Date.now()}.json`);
       setMessage("账号 JSON 已导出");
     } catch (error) { setMessage(error instanceof Error ? error.message : "导出失败"); }
     finally { setBusy(false); }
+  };
+  const loadReportFile = async (file?: File) => {
+    if (!file) return;
+    setReportError("");
+    try {
+      const content = await file.text();
+      parseMatchReport(content);
+      setReportJson(content);
+      setReportName(file.name.replace(/\.json$/i, "") || "战绩报告");
+    } catch (error) { setReportError(error instanceof Error ? error.message : "文件读取失败"); }
+  };
+  const exportReport = async (format: "png" | "pdf") => {
+    setReportError(""); setConverting(format);
+    try {
+      const match = parseMatchReport(reportJson);
+      const svg = isEightBallMatch(match) ? buildEightBallReport(match, reportOptions) : buildScoreReport(match, reportOptions);
+      const canvas = await renderReportCanvas(svg);
+      if (format === "png") {
+        const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error("长图生成失败")), "image/png"));
+        download(blob, `${reportName}-长图.png`);
+      } else {
+        const pages = splitReportCanvas(canvas).map((pageCanvas) => {
+          const page = canvasJpeg(pageCanvas);
+          pageCanvas.width = 1;
+          pageCanvas.height = 1;
+          return page;
+        });
+        download(new Blob([buildPdf(pages) as BlobPart], { type: "application/pdf" }), `${reportName}.pdf`);
+      }
+      canvas.width = 1;
+      canvas.height = 1;
+    } catch (error) { setReportError(error instanceof Error ? error.message : "转换失败"); }
+    finally { setConverting(""); }
   };
   const deleteAccount = async () => {
     if (confirmation !== "删除账号") return;
@@ -1955,11 +2001,11 @@ function AccountDataPanel({ onDeleted }: { onDeleted: () => void }) {
     } catch (error) { setMessage(error instanceof Error ? error.message : "账号删除失败"); }
     finally { setBusy(false); }
   };
-  return <section className="account-data-panel"><header><p className="kicker">DATA CONTROL</p><h2>导出与删除</h2></header><button className="secondary" disabled={busy} onClick={() => void exportData()}>导出完整账号 JSON</button><details><summary>永久删除账号…</summary><p>删除会立即撤销全部会话并删除本人独有数据；已有其他注册参与者的共享对局会保留，但解除你的账号关联。</p><label>当前密码<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label><label>输入“删除账号”确认<input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label><button className="danger-button" disabled={busy || confirmation !== "删除账号" || !password} onClick={() => void deleteAccount()}>永久删除账号</button></details>{message && <p className="form-message" role="status">{message}</p>}</section>;
+  return <section className="account-data-panel"><header><p className="kicker">DATA CONTROL</p><h2>导出与删除</h2></header><div className="data-tool-grid"><div className="data-tool-card"><b>完整账号数据</b><small>导出为便于阅读和处理的多行 JSON 文件。</small><button className="secondary" disabled={busy} onClick={() => void exportData()}>导出完整账号 JSON</button></div><div className="data-tool-card json-report-tool"><b>战绩 JSON 转长图 / PDF</b><small>文件仅在本机浏览器中读取，不上传服务器、不写入数据库。</small><label className="json-file-button">上传 JSON 文件<input type="file" accept="application/json,.json" onChange={(event) => void loadReportFile(event.target.files?.[0])} /></label><label htmlFor="match-json-report">粘贴 JSON 内容</label><textarea id="match-json-report" value={reportJson} spellCheck={false} placeholder={'{\n  "exportVersion": 1,\n  "match": { ... }\n}'} aria-describedby={reportError ? "match-json-error" : undefined} onChange={(event) => { setReportJson(event.target.value); setReportError(""); }} onBlur={() => { if (reportJson.trim()) { try { parseMatchReport(reportJson); } catch (error) { setReportError(error instanceof Error ? error.message : "JSON 格式无效"); } } }} /><ReportOptionFields options={reportOptions} onChange={setReportOptions} /><div className="json-report-actions"><button className="secondary" disabled={!!converting || !reportJson.trim()} onClick={() => void exportReport("png")}>{converting === "png" ? "正在生成长图…" : "下载长图 PNG"}</button><button className="secondary" disabled={!!converting || !reportJson.trim()} onClick={() => void exportReport("pdf")}>{converting === "pdf" ? "正在生成 PDF…" : "下载 PDF"}</button></div>{reportError && <p id="match-json-error" className="json-report-error" role="alert">{reportError}</p>}</div></div><details><summary>永久删除账号…</summary><p>删除会立即撤销全部会话并删除本人独有数据；已有其他注册参与者的共享对局会保留，但解除你的账号关联。</p><label>当前密码<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label><label>输入“删除账号”确认<input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label><button className="danger-button" disabled={busy || confirmation !== "删除账号" || !password} onClick={() => void deleteAccount()}>永久删除账号</button></details>{message && <p className="form-message" role="status">{message}</p>}</section>;
 }
 
 function ProfilePage({ history, user, authLoading, sync, onAuthenticated, onLogout, onAccountDeleted, onRetrySync, ensureDevice, onRestore, onNavigate }: { history: BilliardsMatch[]; user: AuthUser | null; authLoading: boolean; sync: SyncView; onAuthenticated: (user: AuthUser) => void; onLogout: () => void; onAccountDeleted: () => void; onRetrySync: () => void; ensureDevice: () => Promise<string>; onRestore: (match: BilliardsMatch | EightBallMatch, readOnly: boolean) => void; onNavigate: (path: string) => void }) {
-  return <div className="content-page page-shell"><header className="profile-hero"><span className="profile-avatar">{user?.nickname.slice(0, 1) || "游"}</span><div><p className="kicker">{user ? `CLOUD ACCOUNT · ${user.publicCode}` : `LOCAL GUEST · V${APP_VERSION}`}</p><h1>{user ? user.nickname : "游客模式"}</h1><p>{user ? `@${user.username} · 本机数据保留，云端按账号隔离同步。` : "无需注册也可继续计分；登录后才会补传和跨设备恢复。"}</p></div>{user && <button className="secondary" onClick={onLogout}>退出账号</button>}</header>{authLoading ? <section className="account-panel">正在检查账号会话…</section> : !user && <AccountForm onAuthenticated={onAuthenticated} />}<section className="local-stats"><div><strong>{history.length}</strong><span>本机已完成</span></div><div><strong>{history.reduce((sum, match) => sum + match.scoreEvents.length, 0)}</strong><span>计分流水</span></div><div><strong>{sync.pending}</strong><span>待补传项目</span></div></section><section className="settings-list"><header><p className="kicker">SYNC STATUS</p><h2>本机与云端</h2></header><div><span>◎</span><p><b>本地自动保存</b><small>刷新页面仍可恢复未结束对局</small></p><strong className="state-good">已开启</strong></div><div><span>⇅</span><p><b>云端同步</b><small>{sync.message}</small></p><strong className={`sync-label ${sync.state}`}>{({ local: "仅本地", pending: "待同步", syncing: "同步中", synced: "已同步", failed: "同步失败", readonly: "只读" } as const)[sync.state]}</strong></div>{user && (sync.state === "failed" || sync.state === "pending") && <div className="settings-action"><button className="secondary" onClick={onRetrySync}>手动重试</button></div>}</section>{user && <><section className="realtime-entry-card"><div><p className="kicker">REALTIME ROOM</p><h2>多人实时房间</h2><small>创建或加入云端实时房间，全屏共同操作。</small></div><button className="primary" onClick={() => onNavigate("/room")}>进入实时房间 <span>→</span></button></section><CloudMatchesPanel ensureDevice={ensureDevice} onRestore={onRestore} /><LocalMigrationPanel /><AccountDataPanel onDeleted={onAccountDeleted} /></>}</div>;
+  return <div className="content-page page-shell"><header className="profile-hero"><span className="profile-avatar">{user?.nickname.slice(0, 1) || "游"}</span><div><p className="kicker">{user ? `CLOUD ACCOUNT · ${user.publicCode}` : `LOCAL GUEST · V${APP_VERSION}`}</p><h1>{user ? user.nickname : "游客模式"}</h1><p>{user ? `@${user.username}` : "无需注册也可继续计分；登录后才会补传和跨设备恢复。"}</p></div>{user && <button className="secondary" onClick={onLogout}>退出账号</button>}</header>{authLoading ? <section className="account-panel">正在检查账号会话…</section> : !user && <AccountForm onAuthenticated={onAuthenticated} />}<section className="local-stats"><div><strong>{history.length}</strong><span>本机已完成</span></div><div><strong>{history.reduce((sum, match) => sum + match.scoreEvents.length, 0)}</strong><span>计分流水</span></div><div><strong>{sync.pending}</strong><span>待补传项目</span></div></section><section className="settings-list"><header><p className="kicker">SYNC STATUS</p><h2>本机与云端</h2></header><div><span>◎</span><p><b>本地自动保存</b></p><strong className="state-good">已开启</strong></div><div><span>⇅</span><p><b>云端同步</b><small>{sync.message}</small></p><strong className={`sync-label ${sync.state}`}>{({ local: "仅本地", pending: "待同步", syncing: "同步中", synced: "已同步", failed: "同步失败", readonly: "只读" } as const)[sync.state]}</strong></div>{user && (sync.state === "failed" || sync.state === "pending") && <div className="settings-action"><button className="secondary" onClick={onRetrySync}>手动重试</button></div>}</section>{user && <><section className="realtime-entry-card"><div><p className="kicker">REALTIME ROOM</p><h2>多人实时房间</h2><small>创建或加入云端实时房间，全屏共同操作。</small></div><button className="primary" onClick={() => onNavigate("/room")}>进入实时房间 <span>→</span></button></section><CloudMatchesPanel ensureDevice={ensureDevice} onRestore={onRestore} /><LocalMigrationPanel /><AccountDataPanel onDeleted={onAccountDeleted} /></>}</div>;
 }
 
 function ConfirmDialog({ title, body, onCancel, onConfirm }: { title: string; body: string; onCancel: () => void; onConfirm: () => void }) {

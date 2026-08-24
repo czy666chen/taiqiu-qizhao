@@ -59,6 +59,43 @@ test("牌组页默认数量、精简卡牌表单与官方牌库弹窗", async ({
   await expect(officialDeck).toBeFocused();
 });
 
+test("战绩 JSON 可校验并下载长图和 PDF", async ({ page }) => {
+  const mutationRequests: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() !== "GET") mutationRequests.push(`${request.method()} ${new URL(request.url()).pathname}`);
+  });
+  await page.route("**/api/auth/me", (route) => route.fulfill({ json: { user: { id: "user-1", username: "tester", publicCode: "TEST0001", nickname: "测试玩家", avatarUrl: null } } }));
+  await page.route("**/api/history", (route) => route.fulfill({ json: { matches: [] } }));
+  await page.goto("/profile");
+
+  const input = page.getByLabel("粘贴 JSON 内容");
+  await input.fill("{nope}");
+  await input.blur();
+  await expect(page.getByRole("alert")).toContainText("JSON 格式无效");
+
+  await input.fill(JSON.stringify({ exportVersion: 1, match: {
+    version: 1, id: "match-report", mode: "score", status: "completed", createdAt: 1_786_423_085_575,
+    startedAt: 1_786_423_085_575, endedAt: 1_786_423_145_575,
+    players: [
+      { id: "a", name: "阿杰", kind: "guest", initialScore: 0, score: 4, active: true },
+      { id: "b", name: "小陈", kind: "guest", initialScore: 0, score: 0, active: true },
+    ],
+    currentPlayerId: "a", rules: [],
+    scoreEvents: [{ id: "event-1", type: "score", label: "普胜", playerId: "a", changes: { a: 4 }, previousCurrentPlayerId: "a", occurredAt: 1_786_423_115_575 }],
+  } }));
+  await expect(page.getByLabel("日期与逐条时间")).toBeChecked();
+  await expect(page.getByLabel("比分走势")).toBeChecked();
+  await expect(page.getByLabel("分类统计")).toBeChecked();
+  const pngDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载长图 PNG" }).click();
+  await expect((await pngDownload).suggestedFilename()).toBe("战绩报告-长图.png");
+
+  const pdfDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载 PDF" }).click();
+  await expect((await pdfDownload).suggestedFilename()).toBe("战绩报告.pdf");
+  expect(mutationRequests).toEqual([]);
+});
+
 test("直接刷新牌组深链后仍能完成客户端恢复", async ({ page }) => {
   await page.goto("/decks");
   await expect(page.getByRole("heading", { name: "牌组", exact: true })).toBeVisible();

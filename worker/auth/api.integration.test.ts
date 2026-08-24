@@ -300,7 +300,9 @@ describe("R3 authentication HTTP API", () => {
     const exported = await SELF.fetch("http://example.com/api/account/export", { headers: { Cookie: firstCookie } });
     expect(exported.status).toBe(200);
     expect(exported.headers.get("Content-Disposition")).toContain("attachment");
-    await expect(exported.json()).resolves.toMatchObject({
+    const exportedText = await exported.text();
+    expect(exportedText).toContain('\n  "formatVersion"');
+    expect(JSON.parse(exportedText)).toMatchObject({
       formatVersion: 1,
       profile: { id: firstPayload.user.id },
       presets: [{ name: "exported" }],
