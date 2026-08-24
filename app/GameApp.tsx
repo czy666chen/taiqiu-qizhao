@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CARD_DEFINITIONS, CardCategory } from "../src/data/cards";
-import { getOfficialDeck, OFFICIAL_DECKS, officialDeckCardCount, OfficialDeckId } from "../src/lib/official-decks";
+import { getOfficialDeck, officialDeckCardCount, OfficialDeckId } from "../src/lib/official-decks";
+import type { DeckSnapshot } from "../src/lib/custom-decks";
 import {
   addMatchPlayer,
   applyBlackGoldScore,
@@ -303,6 +304,10 @@ function SetupDialog({ initialMode, savedRules, scorePresets, onClose, onStart, 
   const [maxSafetyLevel, setMaxSafetyLevel] = useState<"low" | "medium" | "review">("review");
   const [excludedKeywords, setExcludedKeywords] = useState("");
   const [deckId, setDeckId] = useState<OfficialDeckId>("complete");
+  const [userDeckId, setUserDeckId] = useState("");
+  const [userDeckVersion, setUserDeckVersion] = useState(0);
+  const [deckSnapshot, setDeckSnapshot] = useState<DeckSnapshot>();
+  const userDecks = useUserDecks(user);
   const [reviewing, setReviewing] = useState(false);
   const [savePreset, setSavePreset] = useState(false);
   const [presets, setPresets] = useState(scorePresets.map((preset) => ({ ...preset, rules: preset.rules.map((rule) => ({ ...rule })) })));
@@ -315,7 +320,13 @@ function SetupDialog({ initialMode, savedRules, scorePresets, onClose, onStart, 
   const selectedCustomPreset = presets.find((preset) => preset.id === selectedPresetId);
   const scoreEnabled = initialMode !== "cards";
   const selectedDeck = getOfficialDeck(deckId);
-  const selectedDeckCount = officialDeckCardCount(selectedDeck);
+  const selectedDeckCount = deckSnapshot?.cards.reduce((sum, card) => sum + card.quantity, 0) ?? officialDeckCardCount(selectedDeck);
+  const selectedDeckName = deckSnapshot?.name ?? selectedDeck.name;
+  const selectOfficialDeck = () => { setDeckId("complete"); setUserDeckId(""); setUserDeckVersion(0); setDeckSnapshot(undefined); };
+  const selectUserDeck = async (id: string) => {
+    const detail = await loadUserDeck(id);
+    setUserDeckId(id); setUserDeckVersion(detail.currentVersion); setDeckSnapshot(detail.snapshot);
+  };
   const validPlayers = names.map((name, index) => ({ name: name.trim(), initialScore: playerScores[index] ?? initialScore })).filter((player) => player.name);
   const validNames = validPlayers.map((player) => player.name);
   const valid = validNames.length >= 2 && validNames.length <= 8 && validPlayers.every((player) => Number.isFinite(player.initialScore)) && rules.every((rule) => Number.isFinite(rule.value) && rule.value >= 0) && (!savePreset || !!presetName.trim());
@@ -386,6 +397,7 @@ function SetupDialog({ initialMode, savedRules, scorePresets, onClose, onStart, 
       cardExhaustionPolicy,
       cardFilter: { excludedCategories, maxSafetyLevel, excludedKeywords: excludedKeywords.split(/[，,]/).map((keyword) => keyword.trim()).filter(Boolean) },
       deckId,
+      deckSnapshot,
     }, nextPresets);
   };
 
@@ -405,6 +417,7 @@ function SetupDialog({ initialMode, savedRules, scorePresets, onClose, onStart, 
           turnStrategy,
           cardMode,
           deckId,
+          deckRef: userDeckId ? { kind: "user", deckId: userDeckId, versionNo: userDeckVersion } : { kind: "official", id: "complete", version: 1 },
           handSizes: validPlayers.map(() => Math.max(0, Math.min(10, Math.trunc(handSize)))),
         }),
       });
@@ -476,7 +489,7 @@ function SetupDialog({ initialMode, savedRules, scorePresets, onClose, onStart, 
                 <button className={cardMode === "none" ? "active" : ""} onClick={() => setCardMode("none")}>不抽牌</button>
                 <button className={cardMode === "independent" ? "active" : ""} onClick={() => setCardMode("independent")}>独立手牌</button>
               </div>
-              {cardMode !== "none" && <><div className="deck-picker" aria-label="选择官方牌组">{OFFICIAL_DECKS.map((deck) => <button key={deck.id} className={deckId === deck.id ? "active" : ""} onClick={() => setDeckId(deck.id)}><b>{deck.name}</b><small>{officialDeckCardCount(deck)} 张 · {deck.difficulty}</small><span>{deck.description}</span></button>)}</div><label className="initial-score"><span>每人起始手牌</span><NonNegativeNumberInput ariaLabel="追分每人起始手牌" value={handSize} max={10} onValueChange={setHandSize} /><small>{selectedDeck.name} · {selectedDeckCount} 张实体牌</small></label></>}
+              {cardMode !== "none" && <><div className="deck-picker" aria-label="选择牌组"><button className={!userDeckId ? "active" : ""} onClick={selectOfficialDeck}><b>全量牌库</b><small>{officialDeckCardCount(getOfficialDeck("complete"))} 张 · 官方</small><span>收录全部官方卡牌</span></button>{userDecks.map((deck) => <button key={deck.id} className={userDeckId === deck.id ? "active" : ""} onClick={() => void selectUserDeck(deck.id)}><b>{deck.name}</b><small>V{deck.current_version} · 我的牌组</small><span>已保存到账号</span></button>)}</div><label className="initial-score"><span>每人起始手牌</span><NonNegativeNumberInput ariaLabel="追分每人起始手牌" value={handSize} max={10} onValueChange={setHandSize} /><small>{selectedDeckName} · {selectedDeckCount} 张实体牌</small></label></>}
               {cardMode !== "none" && <div className="advanced-card-settings"><label><span>自动补牌</span><select aria-label="自动补牌策略" value={cardAutoDrawPolicy} onChange={(event) => setCardAutoDrawPolicy(event.target.value as AutoDrawPolicy)}><option value="manual">仅手动抽牌</option><option value="game">每小局补满</option><option value="round">每轮补满</option><option value="after_play">用牌后补一张</option></select></label><label><span>手牌上限</span><input aria-label="手牌上限" type="number" min={handSize} max="20" value={cardHandLimit} onChange={(event) => setCardHandLimit(Number(event.target.value))} /></label><label><span>牌库耗尽</span><select aria-label="牌库耗尽策略" value={cardExhaustionPolicy} onChange={(event) => setCardExhaustionPolicy(event.target.value as DeckExhaustionPolicy)}><option value="stop">停止抽牌</option><option value="reshuffle">确认后重洗弃牌</option></select></label><label><span>最高安全等级</span><select aria-label="卡牌最高安全等级" value={maxSafetyLevel} onChange={(event) => setMaxSafetyLevel(event.target.value as "low" | "medium" | "review")}><option value="review">包含待复核</option><option value="medium">排除待复核</option><option value="low">仅低风险</option></select></label><fieldset><legend>排除类别</legend>{([['strategy','竞技策略'],['social','社交惩罚'],['physical','身体动作'],['chaos','趣味混沌']] as const).map(([id, label]) => <label key={id}><input type="checkbox" checked={excludedCategories.includes(id)} onChange={(event) => setExcludedCategories(event.target.checked ? [...excludedCategories, id] : excludedCategories.filter((item) => item !== id))} />{label}</label>)}</fieldset><label className="filter-keywords"><span>排除关键词</span><input aria-label="排除卡牌关键词" placeholder="用逗号分隔，例如：红包，朋友圈" value={excludedKeywords} onChange={(event) => setExcludedKeywords(event.target.value)} /></label></div>}
             </section>
           </div>
@@ -658,10 +671,103 @@ function PlayPage({ onStart, onStartEight }: { onStart: (mode: MatchMode) => voi
   </div></div>;
 }
 
-function DecksPage() {
+type CustomCardRow = { id: string; title: string; effect: string; default_quantity: number; safety_level: "low" | "medium" | "review"; safety_note: string | null };
+
+function deckEditorQuantities(customCards: CustomCardRow[], quantity = 1) {
+  return Object.fromEntries([
+    ...CARD_DEFINITIONS.map((card) => [`official:${card.id}`, quantity] as const),
+    ...customCards.map((card) => [`custom:${card.id}`, quantity] as const),
+  ]);
+}
+
+function DecksPage({ user }: { user: AuthUser | null }) {
   const [query, setQuery] = useState("");
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [customCards, setCustomCards] = useState<CustomCardRow[]>([]);
+  const [decks, setDecks] = useState<UserDeckSummary[]>([]);
+  const [editingId, setEditingId] = useState("");
+  const [editingVersion, setEditingVersion] = useState(0);
+  const [deckName, setDeckName] = useState("");
+  const [quantities, setQuantities] = useState<Record<string, number>>(() => deckEditorQuantities([]));
+  const [cardTitle, setCardTitle] = useState("");
+  const [cardEffect, setCardEffect] = useState("");
+  const [editingCardId, setEditingCardId] = useState("");
+  const [cardSafetyLevel, setCardSafetyLevel] = useState<"low" | "medium" | "review">("low");
+  const [cardSafetyNote, setCardSafetyNote] = useState("");
+  const [message, setMessage] = useState("");
+  const catalogDialogRef = useRef<HTMLDialogElement>(null);
+  const official = getOfficialDeck("complete");
+  const refresh = async () => {
+    if (!user) return;
+    const [catalog, deckList] = await Promise.all([
+      fetch("/api/card-catalog").then((response) => apiPayload<{ customCards: CustomCardRow[] }>(response)),
+      fetch("/api/decks").then((response) => apiPayload<{ decks: UserDeckSummary[] }>(response)),
+    ]);
+    setCustomCards(catalog.customCards); setQuantities((current) => ({ ...deckEditorQuantities(catalog.customCards), ...current })); setDecks(deckList.decks);
+  };
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    void Promise.all([
+      fetch("/api/card-catalog").then((response) => apiPayload<{ customCards: CustomCardRow[] }>(response)),
+      fetch("/api/decks").then((response) => apiPayload<{ decks: UserDeckSummary[] }>(response)),
+    ]).then(([catalog, deckList]) => {
+      if (active) { setCustomCards(catalog.customCards); setQuantities((current) => ({ ...deckEditorQuantities(catalog.customCards), ...current })); setDecks(deckList.decks); }
+    }).catch(() => { if (active) setMessage("账号牌组加载失败，请稍后重试"); });
+    return () => { active = false; };
+  }, [user]);
+  useEffect(() => {
+    const dialog = catalogDialogRef.current;
+    if (!catalogOpen || !dialog) return;
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialog.showModal();
+    return () => {
+      if (dialog.open) dialog.close();
+      trigger?.focus();
+    };
+  }, [catalogOpen]);
   const cards = CARD_DEFINITIONS.filter((card) => `${card.title}${card.effect}`.toLowerCase().includes(query.trim().toLowerCase()));
-  return <div className="content-page page-shell"><header className="page-title split"><div><p className="kicker">DECK LIBRARY</p><h1>牌组</h1></div><div className="deck-summary"><span>4<small>官方牌组</small></span><span>V1<small>当前版本</small></span></div></header><div className="official-deck-grid">{OFFICIAL_DECKS.map((deck) => <section className="official-deck" key={deck.id}><div className="official-art"><span>8</span></div><div><p className="kicker">OFFICIAL · V{deck.version}</p><h2>{deck.name}</h2><p>{deck.description}</p><div className="tag-row"><span>{officialDeckCardCount(deck)} 张</span><span>{deck.difficulty}</span><span>{deck.safety}</span></div></div></section>)}</div><section className="card-catalog"><div className="section-heading"><div><p className="kicker">ALL CARDS</p><h2>完整卡牌清单</h2></div><label className="search"><span>⌕</span><input type="search" placeholder="搜索名称或效果" value={query} onChange={(event) => setQuery(event.target.value)} /></label></div><div className="catalog-list">{cards.map((card) => <article key={card.id}><span>{card.id.slice(-3)}</span><div><b>{card.title}{card.count > 1 && <em> ×{card.count}</em>}</b><p>{card.effect}</p></div></article>)}</div></section></div>;
+  const setQuantity = (key: string, value: number) => setQuantities({ ...quantities, [key]: Math.max(0, Math.min(10, Math.trunc(value))) });
+  const resetEditor = () => { setEditingId(""); setEditingVersion(0); setDeckName(""); setQuantities(deckEditorQuantities(customCards)); };
+  const editDeck = async (id: string) => {
+    const detail = await loadUserDeck(id);
+    setEditingId(id); setEditingVersion(detail.currentVersion); setDeckName(detail.snapshot.name);
+    setQuantities({ ...deckEditorQuantities(customCards, 0), ...Object.fromEntries(detail.snapshot.cards.map((card) => [`${card.source}:${card.definitionId}`, card.quantity])) });
+  };
+  const copyDeck = async (id: string) => { await editDeck(id); setEditingId(""); setEditingVersion(0); setDeckName((name) => `${name} 副本`.slice(0, 40)); };
+  const saveDeck = async () => {
+    const cards = Object.entries(quantities).filter(([, quantity]) => quantity > 0).map(([key, quantity]) => {
+      const [source, definitionId] = key.split(":"); return { source, definitionId, quantity };
+    });
+    const response = await fetch(editingId ? `/api/decks/${editingId}` : "/api/decks", {
+      method: editingId ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ operationId: crypto.randomUUID(), ...(editingId ? { expectedVersion: editingVersion } : {}), name: deckName, cards }),
+    });
+    const payload = await response.json() as { error?: string };
+    if (!response.ok) throw new Error(payload.error ?? "保存失败");
+    resetEditor(); await refresh(); setMessage("牌组已保存");
+  };
+  const saveCard = async () => {
+    await apiPayload(await fetch(editingCardId ? `/api/custom-cards/${editingCardId}` : "/api/custom-cards", { method: editingCardId ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: cardTitle, effect: cardEffect, safetyLevel: cardSafetyLevel, safetyNote: cardSafetyNote, defaultQuantity: 1 }) }));
+    setCardTitle(""); setCardEffect(""); setCardSafetyLevel("low"); setCardSafetyNote(""); setEditingCardId(""); await refresh(); setMessage(editingCardId ? "自定义卡牌已更新" : "自定义卡牌已创建");
+  };
+  const remove = async (path: string) => { await apiPayload(await fetch(path, { method: "DELETE" })); await refresh(); setMessage("已删除；历史版本快照保持不变"); };
+  return <div className="content-page page-shell">
+    <header className="page-title split"><div><p className="kicker">DECK LIBRARY</p><h1>牌组</h1></div><div className="deck-summary"><span>1<small>官方牌组</small></span><span>{decks.length}<small>我的牌组</small></span></div></header>
+    <div className="official-deck-grid"><button type="button" className="official-deck" aria-haspopup="dialog" onClick={() => setCatalogOpen(true)}><div className="official-art"><span>8</span></div><div><p className="kicker">OFFICIAL · V1</p><h2>全量牌库</h2><p>{official.description}</p><div className="tag-row"><span>{officialDeckCardCount(official)} 张</span><span>唯一官方入口</span></div></div></button></div>
+    {user ? <>
+      <section className="card-catalog deck-editor"><div className="section-heading"><div><p className="kicker">MY DECKS</p><h2>{editingId ? "编辑牌组" : "新建牌组"}</h2></div>{editingId && <button onClick={resetEditor}>取消编辑</button>}</div>
+        <label><span>牌组名称</span><input maxLength={40} value={deckName} onChange={(event) => setDeckName(event.target.value)} /></label>
+        <div className="deck-list">{decks.map((deck) => <article key={deck.id}><button type="button" className="deck-list-item-main" onClick={() => void editDeck(deck.id)}><b>{deck.name}</b><small>V{deck.current_version}</small></button><button type="button" className="deck-list-action" aria-label={`复制${deck.name}`} onClick={() => void copyDeck(deck.id)}>复制</button><button type="button" className="deck-list-action is-danger" aria-label={`删除${deck.name}`} onClick={() => void remove(`/api/decks/${deck.id}`)}>删除</button></article>)}</div>
+        <div className="catalog-list deck-card-picker">{cards.map((card) => { const key = `official:${card.id}`; return <article key={key}><input aria-label={`${card.title}数量`} type="number" min="0" max="10" value={quantities[key] ?? 0} onChange={(event) => setQuantity(key, Number(event.target.value))} /><div><b>{card.title}</b><p>{card.effect}</p></div></article>; })}{customCards.map((card) => { const key = `custom:${card.id}`; return <article key={key}><input aria-label={`${card.title}数量`} type="number" min="0" max="10" value={quantities[key] ?? 0} onChange={(event) => setQuantity(key, Number(event.target.value))} /><div><b>{card.title} <em>我的卡牌</em></b><p>{card.effect}</p></div></article>; })}</div>
+        <button className="primary" disabled={!deckName.trim() || !Object.values(quantities).some(Boolean)} onClick={() => void saveDeck().catch((error) => setMessage(error instanceof Error ? error.message : "保存失败"))}>明确保存</button>
+      </section>
+      <section className="card-catalog custom-card-editor"><div className="section-heading"><div><p className="kicker">MY CARDS</p><h2>{editingCardId ? "编辑卡牌" : "我的卡牌"}</h2></div>{editingCardId && <button onClick={() => { setEditingCardId(""); setCardTitle(""); setCardEffect(""); setCardSafetyNote(""); }}>取消编辑</button>}</div><div className="eight-form-grid"><label className="wide"><span>标题</span><input maxLength={40} value={cardTitle} onChange={(event) => setCardTitle(event.target.value)} /></label><label className="wide"><span>效果</span><input maxLength={500} value={cardEffect} onChange={(event) => setCardEffect(event.target.value)} /></label></div><button disabled={!cardTitle.trim() || !cardEffect.trim()} onClick={() => void saveCard().catch((error) => setMessage(error instanceof Error ? error.message : "保存失败"))}>{editingCardId ? "保存卡牌" : "创建卡牌"}</button><div className="deck-list">{customCards.map((card) => <article key={card.id}><button type="button" className="deck-list-item-main" onClick={() => { setEditingCardId(card.id); setCardTitle(card.title); setCardEffect(card.effect); setCardSafetyLevel(card.safety_level); setCardSafetyNote(card.safety_note ?? ""); }}><b>{card.title}</b><small>{card.effect}</small></button><button type="button" className="deck-list-action is-danger" aria-label={`删除${card.title}`} onClick={() => void remove(`/api/custom-cards/${card.id}`)}>删除</button></article>)}</div></section>
+      {message && <p className="form-message" role="status">{message}</p>}
+    </> : <section className="card-catalog"><h2>登录后创建自己的卡牌与牌组</h2><p className="form-message">官方全量牌库无需登录即可使用。</p></section>}
+    {catalogOpen && <dialog ref={catalogDialogRef} className="setup-modal card-catalog-modal" aria-labelledby="official-catalog-title" onClose={() => setCatalogOpen(false)}><header className="modal-heading"><div><p className="kicker">ALL OFFICIAL CARDS</p><h2 id="official-catalog-title">官方卡牌清单</h2></div><button type="button" className="icon-button" aria-label="关闭官方卡牌清单" onClick={() => catalogDialogRef.current?.close()}>×</button></header><div className="catalog-modal-body"><label className="search"><span aria-hidden="true">⌕</span><input aria-label="搜索官方卡牌" type="search" placeholder="搜索名称或效果" value={query} onChange={(event) => setQuery(event.target.value)} /></label><div className="catalog-list">{cards.map((card) => <article key={card.id}><span>{card.id.slice(-3)}</span><div><b>{card.title}{card.count > 1 && <em> ×{card.count}</em>}</b><p>{card.effect}</p></div></article>)}</div></div></dialog>}
+  </div>;
 }
 
 function EightBallSetupDialog({ defaultLayout, onClose, onStart, user, onCloudRoomCreated }: { defaultLayout: EightBallLayout; onClose: () => void; onStart: (draft: EightBallDraft) => void; user: AuthUser | null; onCloudRoomCreated: (code: string) => void }) {
@@ -675,12 +781,21 @@ function EightBallSetupDialog({ defaultLayout, onClose, onStart, user, onCloudRo
   const [note, setNote] = useState("");
   const [cardMode, setCardMode] = useState<CardMode>("none");
   const [deckId, setDeckId] = useState<OfficialDeckId>("complete");
+  const [userDeckId, setUserDeckId] = useState("");
+  const [userDeckVersion, setUserDeckVersion] = useState(0);
+  const [deckSnapshot, setDeckSnapshot] = useState<DeckSnapshot>();
+  const userDecks = useUserDecks(user);
   const [handSizes, setHandSizes] = useState<[number, number]>([1, 1]);
   const [hostMode, setHostMode] = useState<"local" | "cloud">("local");
   const [cloudBusy, setCloudBusy] = useState(false);
   const [cloudError, setCloudError] = useState("");
   const valid = names.every((name) => name.trim()) && (raceMode === "free" || (Number.isInteger(raceTo) && raceTo >= 1 && raceTo <= 99));
   const clampedHandSizes = handSizes.map((size) => Math.max(0, Math.min(10, Math.trunc(size)))) as [number, number];
+  const selectOfficialDeck = () => { setDeckId("complete"); setUserDeckId(""); setUserDeckVersion(0); setDeckSnapshot(undefined); };
+  const selectUserDeck = async (id: string) => {
+    const detail = await loadUserDeck(id);
+    setUserDeckId(id); setUserDeckVersion(detail.currentVersion); setDeckSnapshot(detail.snapshot);
+  };
   const submitCloud = async () => {
     if (!user || cloudBusy) return;
     setCloudBusy(true); setCloudError("");
@@ -698,6 +813,7 @@ function EightBallSetupDialog({ defaultLayout, onClose, onStart, user, onCloudRo
           firstServer,
           cardMode,
           deckId,
+          deckRef: userDeckId ? { kind: "user", deckId: userDeckId, versionNo: userDeckVersion } : { kind: "official", id: "complete", version: 1 },
           handSizes: clampedHandSizes,
         }),
       });
@@ -761,7 +877,7 @@ function EightBallSetupDialog({ defaultLayout, onClose, onStart, user, onCloudRo
               <button className={cardMode === "none" ? "active" : ""} onClick={() => setCardMode("none")}>不抽牌</button>
               <button className={cardMode === "independent" ? "active" : ""} onClick={() => setCardMode("independent")}>独立手牌</button>
             </div>
-            {cardMode !== "none" && <><div className="deck-picker" aria-label="选择官方牌组">{OFFICIAL_DECKS.map((deck) => <button key={deck.id} className={deckId === deck.id ? "active" : ""} onClick={() => setDeckId(deck.id)}><b>{deck.name}</b><small>{officialDeckCardCount(deck)} 张 · {deck.difficulty}</small><span>{deck.description}</span></button>)}</div><div className="eight-form-grid">{names.map((name, index) => <label key={index}><span>{name || `玩家 ${index + 1}`} 起始手牌</span><NonNegativeNumberInput ariaLabel={`中八玩家 ${index + 1} 起始手牌`} value={handSizes[index]} max={10} onValueChange={(value) => setHandSizes(handSizes.map((item, itemIndex) => itemIndex === index ? value : item) as [number, number])} /></label>)}</div></>}
+            {cardMode !== "none" && <><div className="deck-picker" aria-label="选择牌组"><button className={!userDeckId ? "active" : ""} onClick={selectOfficialDeck}><b>全量牌库</b><small>{officialDeckCardCount(getOfficialDeck("complete"))} 张 · 官方</small><span>收录全部官方卡牌</span></button>{userDecks.map((deck) => <button key={deck.id} className={userDeckId === deck.id ? "active" : ""} onClick={() => void selectUserDeck(deck.id)}><b>{deck.name}</b><small>V{deck.current_version} · 我的牌组</small><span>已保存到账号</span></button>)}</div><div className="eight-form-grid">{names.map((name, index) => <label key={index}><span>{name || `玩家 ${index + 1}`} 起始手牌</span><NonNegativeNumberInput ariaLabel={`中八玩家 ${index + 1} 起始手牌`} value={handSizes[index]} max={10} onValueChange={(value) => setHandSizes(handSizes.map((item, itemIndex) => itemIndex === index ? value : item) as [number, number])} /></label>)}</div></>}
           </section>
         </div>
         <footer className="modal-actions">
@@ -769,7 +885,7 @@ function EightBallSetupDialog({ defaultLayout, onClose, onStart, user, onCloudRo
           {hostMode === "cloud" ? (
             <button className="primary" disabled={!valid || !user || cloudBusy} onClick={() => void submitCloud()}>{cloudBusy ? "正在创建云端房间…" : "确认创建云端房间"} <span>→</span></button>
           ) : (
-            <button className="primary" disabled={!valid} onClick={() => onStart({ playerNames: names, raceTo: raceMode === "race" ? raceTo : null, firstServer, serveRule, layout: defaultLayout, title, location, note, cardMode, deckId, initialHandSize: clampedHandSizes[0], initialHandSizes: clampedHandSizes })}>确认并开始 <span>→</span></button>
+            <button className="primary" disabled={!valid} onClick={() => onStart({ playerNames: names, raceTo: raceMode === "race" ? raceTo : null, firstServer, serveRule, layout: defaultLayout, title, location, note, cardMode, deckId, deckSnapshot, initialHandSize: clampedHandSizes[0], initialHandSizes: clampedHandSizes })}>确认并开始 <span>→</span></button>
           )}
         </footer>
         {hostMode === "cloud" && <p className="form-message" role="status">{cloudError || (user ? "确认后将直接创建云端实时房间并取得房间码。" : "登录后可用云端实时房间；游客仍可使用本机计分。")}</p>}
@@ -821,6 +937,26 @@ function buildEightBallReport(match: EightBallMatch, options: ReportOptions) {
   parts.push(`<text x="50" y="${y}" class="section">逐局比分</text>`); y+=30;
   parts.push(...rounds.map((round,index)=>{const winner=players.find((player)=>player.id===round.winnerId)?.name??""; const prefix=options.time?`${reportClock(round.confirmedAt)}  `:""; const score=players.map((player)=>round.after[player.id]??0).join(" : "); const note=round.note?` · ${round.note.slice(0,24)}`:""; const rowY=y+index*54; return `<rect x="50" y="${rowY}" width="800" height="45" rx="10" fill="${index%2?"#0d1b16":"#10211a"}"/><text x="70" y="${rowY+29}" class="row">${prefix}第 ${index+1} 局 · ${escapeMarkup(winner)} · ${EIGHT_BALL_WIN_LABELS[round.winType]}${escapeMarkup(note)}</text><text x="780" y="${rowY+29}" text-anchor="end" class="strong">${score}</text>`;})); y+=rounds.length*54+55;
   const height=Math.max(1200,y); return `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="${height}" viewBox="0 0 900 ${height}">${reportStyles()}${parts.join("")}<text x="450" y="${height-25}" text-anchor="middle" class="small">台球奇招 · MATCH REPORT</text></svg>`;
+}
+
+type UserDeckSummary = { id: string; name: string; current_version: number; updated_at: number };
+
+function useUserDecks(user: AuthUser | null) {
+  const [decks, setDecks] = useState<UserDeckSummary[]>([]);
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    void fetch("/api/decks").then((response) => apiPayload<{ decks: UserDeckSummary[] }>(response))
+      .then((payload) => { if (active) setDecks(payload.decks); })
+      .catch(() => { if (active) setDecks([]); });
+    return () => { active = false; };
+  }, [user]);
+  return user ? decks : [];
+}
+
+async function loadUserDeck(id: string): Promise<{ currentVersion: number; snapshot: DeckSnapshot }> {
+  const payload = await apiPayload<{ deck: { currentVersion: number; snapshot: DeckSnapshot } }>(await fetch(`/api/decks/${id}`));
+  return payload.deck;
 }
 function printEightBall(match: EightBallMatch, options: ReportOptions) { openReportPdf(buildEightBallReport(match,options),match.title||"中八双人赛"); }
 function exportEightBallImage(match: EightBallMatch, options: ReportOptions) { downloadText(`中八战绩-${match.id}.svg`,buildEightBallReport(match,options),"image/svg+xml"); }
@@ -2235,7 +2371,7 @@ export default function GameApp() {
       const roomCode = path.startsWith("/room/") ? path.slice("/room/".length) : "";
       return <RealtimeRoomPanel user={user} roomCode={roomCode} onNavigate={navigate} />;
     }
-    if (path === "/decks") return <DecksPage />;
+    if (path === "/decks") return <DecksPage user={user} />;
     if (path.startsWith("/history")) {
       const selectedId = path.split("/")[2];
       const selectedMatch = data.history.find((match) => match.id === selectedId);

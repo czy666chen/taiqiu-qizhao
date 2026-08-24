@@ -1709,6 +1709,34 @@ describe("R4 MatchRoom Durable Object", () => {
     });
   });
 
+  it("resolves an owned deck version before creating a realtime room", async () => {
+    const host = await register("custom_deck_host");
+    const deckId = crypto.randomUUID();
+    const snapshot = { formatVersion: 1, name: "混合牌组", cards: [
+      { source: "official", definitionId: "card-001", quantity: 1 },
+      { source: "custom", definitionId: crypto.randomUUID(), quantity: 1, snapshot: { title: "再来一杆", effect: "再打一杆", safetyLevel: "low" } },
+    ] };
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO decks (id, owner_user_id, name, current_version) VALUES (?1, ?2, ?3, 1)").bind(deckId, host.userId, snapshot.name),
+      env.DB.prepare("INSERT INTO deck_versions (id, deck_id, version_no, snapshot_json, checksum) VALUES (?1, ?2, 1, ?3, 'test')").bind(crypto.randomUUID(), deckId, JSON.stringify(snapshot)),
+    ]);
+    const created = await SELF.fetch("http://example.com/api/realtime/rooms/direct", {
+      method: "POST",
+      headers: { Cookie: host.cookie, Origin: "http://example.com", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operationId: "direct-custom-deck-1", mode: "score_cards",
+        players: [{ name: "甲", initialScore: 0 }, { name: "乙", initialScore: 0 }],
+        rules: [{ id: "win", label: "普胜", value: 4, kind: "gain", enabled: true }],
+        turnStrategy: "fixed", cardMode: "independent", handSizes: [1, 1],
+        deckRef: { kind: "user", deckId, versionNo: 1 },
+      }),
+    });
+    expect(created.status).toBe(201);
+    const body = await created.json() as { matchId: string };
+    const stored = await env.DB.prepare("SELECT snapshot_json FROM matches WHERE id = ?1").bind(body.matchId).first<string>("snapshot_json");
+    expect(JSON.parse(stored!).cards.deckSnapshot).toEqual(snapshot);
+  });
+
   it("rejects invalid direct-create drafts and requires login", async () => {
     const host = await register("direct_invalid_host");
     const cases: Array<{ body: Record<string, unknown>; status: number }> = [

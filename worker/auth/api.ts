@@ -363,13 +363,14 @@ async function updateProfile(request: Request, env: AuthEnv): Promise<Response> 
 async function exportAccount(request: Request, env: AuthEnv): Promise<Response> {
   const session = await requireSession(env, request);
   const userId = session.user.id;
-  const [profile, presets, decks, deckVersions, matches, players, scoreEvents, cardEvents, contacts] = await env.DB.batch([
+  const [profile, presets, customCards, decks, deckVersions, matches, players, scoreEvents, cardEvents, contacts] = await env.DB.batch([
     env.DB.prepare(
       `SELECT u.id, u.display_username AS username, u.created_at, u.updated_at,
               p.public_code, p.nickname, p.avatar_url
          FROM users u JOIN profiles p ON p.user_id = u.id WHERE u.id = ?1`,
     ).bind(userId),
     env.DB.prepare("SELECT * FROM score_presets WHERE owner_user_id = ?1 ORDER BY created_at").bind(userId),
+    env.DB.prepare("SELECT * FROM custom_cards WHERE owner_user_id = ?1 ORDER BY created_at").bind(userId),
     env.DB.prepare("SELECT * FROM decks WHERE owner_user_id = ?1 ORDER BY created_at").bind(userId),
     env.DB.prepare(
       "SELECT dv.* FROM deck_versions dv JOIN decks d ON d.id = dv.deck_id WHERE d.owner_user_id = ?1 ORDER BY dv.created_at",
@@ -406,6 +407,7 @@ async function exportAccount(request: Request, env: AuthEnv): Promise<Response> 
     exportedAt: Date.now(),
     profile: profile.results[0] ?? null,
     presets: presets.results,
+    customCards: customCards.results,
     decks: decks.results,
     deckVersions: deckVersions.results,
     matches: matches.results,

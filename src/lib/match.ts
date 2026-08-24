@@ -1,6 +1,7 @@
 import { CardInstance, createDeck, secureRandomIndex } from "./deck";
 import { getOfficialDeck, OfficialDeckId } from "./official-decks";
 import { CARD_DEFINITIONS, CardCategory, CardSafetyLevel, getCardCategory, getCardSafetyLevel } from "../data/cards";
+import { deckSnapshotInstances, type DeckSnapshot, type DeckSnapshotCard } from "./custom-decks";
 
 export type MatchMode = "cards" | "score" | "score_cards";
 export type CardMode = "none" | "shared" | "independent";
@@ -90,11 +91,12 @@ export interface MatchCardState {
   exhaustionPolicy?: DeckExhaustionPolicy;
   filter?: MatchCardFilter;
   deckSnapshot: {
-    id: OfficialDeckId;
-    version: 1;
+    id: string;
+    version: number;
     name: string;
     definitionIds: string[];
     cardCount: number;
+    source?: "official" | "user";
     filter?: MatchCardFilter;
   };
 }
@@ -128,6 +130,7 @@ export interface MatchDraft {
   initialHandSize: number;
   initialHandSizes?: number[];
   deckId?: OfficialDeckId;
+  deckSnapshot?: DeckSnapshot;
   playerInitialScores?: number[];
   turnStrategy?: TurnStrategy;
   cardAutoDrawPolicy?: AutoDrawPolicy;
@@ -186,12 +189,21 @@ function cardAllowed(definitionId: string, filter: MatchCardFilter): boolean {
   return !filter.excludedKeywords.some((keyword) => searchable.includes(keyword));
 }
 
+function snapshotCardAllowed(card: DeckSnapshotCard, filter: MatchCardFilter): boolean {
+  if (card.source === "official") return cardAllowed(card.definitionId, filter);
+  const allowedSafety = filter.maxSafetyLevel === "review" ? ["low", "medium", "review"] : filter.maxSafetyLevel === "medium" ? ["low", "medium"] : ["low"];
+  if (!allowedSafety.includes(card.snapshot.safetyLevel)) return false;
+  const searchable = `${card.snapshot.title}${card.snapshot.effect}${card.snapshot.safetyNote ?? ""}`.toLowerCase();
+  return !filter.excludedKeywords.some((keyword) => searchable.includes(keyword));
+}
+
 export interface MatchCardStateDraft {
   cardMode: Exclude<CardMode, "none">;
   handIds: string[];
   initialHandSize: number;
   initialHandSizes?: number[];
   deckId?: OfficialDeckId;
+  deckSnapshot?: DeckSnapshot;
   cardAutoDrawPolicy?: AutoDrawPolicy;
   cardHandLimit?: number;
   cardExhaustionPolicy?: DeckExhaustionPolicy;
@@ -202,7 +214,9 @@ export function createMatchCardState(draft: MatchCardStateDraft, randomIndex = s
   const officialDeck = getOfficialDeck(draft.deckId);
   const filter = normalizeCardFilter(draft.cardFilter);
   const handIds = draft.cardMode === "shared" ? ["shared"] : draft.handIds;
-  let remaining = createDeck().filter((card) => officialDeck.definitionIds.includes(card.definitionId) && cardAllowed(card.definitionId, filter));
+  let remaining = draft.deckSnapshot
+    ? deckSnapshotInstances({ ...draft.deckSnapshot, cards: draft.deckSnapshot.cards.filter((card) => snapshotCardAllowed(card, filter)) })
+    : createDeck().filter((card) => officialDeck.definitionIds.includes(card.definitionId) && cardAllowed(card.definitionId, filter));
   const hands: Record<string, CardInstance[]> = {};
   const perHandMax = draft.cardMode === "shared" ? remaining.length : Math.floor(remaining.length / Math.max(1, handIds.length));
   const uniformSize = Math.max(0, Math.trunc(draft.initialHandSize));
@@ -232,9 +246,10 @@ export function createMatchCardState(draft: MatchCardStateDraft, randomIndex = s
     exhaustionPolicy: draft.cardExhaustionPolicy ?? "stop",
     filter,
     deckSnapshot: {
-      id: officialDeck.id,
-      version: officialDeck.version,
-      name: officialDeck.name,
+      id: draft.deckSnapshot ? "user" : officialDeck.id,
+      version: draft.deckSnapshot?.formatVersion ?? officialDeck.version,
+      name: draft.deckSnapshot?.name ?? officialDeck.name,
+      source: draft.deckSnapshot ? "user" : "official",
       definitionIds: Array.from(new Set(remaining.concat(...Object.values(hands)).map((card) => card.definitionId))),
       cardCount: remaining.length + Object.values(hands).reduce((sum, hand) => sum + hand.length, 0),
       filter: { ...filter, excludedCategories: [...filter.excludedCategories], excludedKeywords: [...filter.excludedKeywords] },
@@ -283,6 +298,7 @@ export function createMatch(draft: MatchDraft, now = Date.now(), randomIndex = s
       initialHandSize: draft.initialHandSize,
       initialHandSizes: draft.initialHandSizes,
       deckId: draft.deckId,
+      deckSnapshot: draft.deckSnapshot,
       cardAutoDrawPolicy: draft.cardAutoDrawPolicy,
       cardHandLimit: draft.cardHandLimit,
       cardExhaustionPolicy: draft.cardExhaustionPolicy,

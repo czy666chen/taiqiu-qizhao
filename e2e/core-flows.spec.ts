@@ -37,6 +37,36 @@ test.describe("追分核心流程", () => {
   });
 });
 
+test("牌组页默认数量、精简卡牌表单与官方牌库弹窗", async ({ page }) => {
+  await page.route("**/api/auth/me", (route) => route.fulfill({ json: { user: { id: "user-1", username: "tester", publicCode: "TEST0001", nickname: "测试玩家", avatarUrl: null } } }));
+  await page.route("**/api/card-catalog", (route) => route.fulfill({ json: { customCards: [] } }));
+  await page.route("**/api/decks", (route) => route.fulfill({ json: { decks: [] } }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "牌组" }).click();
+
+  const quantityInputs = page.locator(".deck-card-picker input");
+  await expect(quantityInputs.first()).toHaveValue("1");
+  expect(await quantityInputs.evaluateAll((inputs) => inputs.every((input) => (input as HTMLInputElement).value === "1"))).toBe(true);
+  await expect(page.getByText("安全等级", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("安全提示（可选）", { exact: true })).toHaveCount(0);
+
+  const officialDeck = page.getByRole("button", { name: /全量牌库/ });
+  await officialDeck.click();
+  await expect(page.getByRole("dialog", { name: "官方卡牌清单" })).toBeVisible();
+  await expect(page.getByLabel("搜索官方卡牌")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "官方卡牌清单" })).toHaveCount(0);
+  await expect(officialDeck).toBeFocused();
+});
+
+test("直接刷新牌组深链后仍能完成客户端恢复", async ({ page }) => {
+  await page.goto("/decks");
+  await expect(page.getByRole("heading", { name: "牌组", exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "牌组", exact: true })).toBeVisible();
+  await expect(page.getByText("正在恢复本机对局…")).toHaveCount(0);
+});
+
 test("R2.5 中八建局、逐局录入、布局切换、恢复与战绩导出", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /开始中八比赛/ }).click();
@@ -79,7 +109,7 @@ test("奇招牌抽取、使用、安全跳过和刷新恢复", async ({ page }) 
   await page.goto("/");
   await page.getByRole("button", { name: "玩法" }).click();
   await page.getByRole("button", { name: "查看并开始" }).click();
-  await page.getByRole("button", { name: /安全牌组/ }).click();
+  await page.getByRole("button", { name: /全量牌库/ }).click();
   await page.getByRole("button", { name: /下一步：确认规则/ }).click();
   await page.getByRole("button", { name: /确认并开始/ }).click();
   const initialCards = await page.locator(".trick-card").count();

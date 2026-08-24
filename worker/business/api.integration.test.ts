@@ -36,6 +36,7 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM deck_cards"),
     env.DB.prepare("DELETE FROM deck_versions"),
     env.DB.prepare("DELETE FROM decks"),
+    env.DB.prepare("DELETE FROM custom_cards"),
     env.DB.prepare("DELETE FROM score_presets"),
     env.DB.prepare("DELETE FROM player_contacts"),
     env.DB.prepare("DELETE FROM player_invites"),
@@ -120,6 +121,60 @@ describe("R3 business authorization and cloud APIs", () => {
     expect((await api(`/api/decks/${deckId}`, a.cookie)).status).toBe(200);
     expect((await api(`/api/presets/${presetId}`, b.cookie)).status).toBe(404);
     expect((await api(`/api/decks/${deckId}`, b.cookie)).status).toBe(404);
+  });
+
+  it("creates private custom cards and immutable idempotent deck versions", async () => {
+    const owner = await register("deck_owner");
+    const other = await register("deck_other");
+    const cardResponse = await write("/api/custom-cards", owner.cookie, {
+      title: "再来一杆",
+      effect: "本回合未进球时可以再击打一杆。",
+      defaultQuantity: 2,
+      safetyLevel: "low",
+    });
+    expect(cardResponse.status).toBe(201);
+    const card = (await cardResponse.json() as { customCard: { id: string } }).customCard;
+    await expect((await api("/api/custom-cards", other.cookie)).json()).resolves.toEqual({ customCards: [] });
+
+    const operationId = crypto.randomUUID();
+    const createBody = {
+      operationId,
+      name: "周五朋友局",
+      cards: [
+        { source: "official", definitionId: "card-001", quantity: 1 },
+        { source: "custom", definitionId: card.id, quantity: 2 },
+      ],
+    };
+    const created = await write("/api/decks", owner.cookie, createBody);
+    expect(created.status).toBe(201);
+    const deck = (await created.json() as { deck: { id: string; currentVersion: number } }).deck;
+    expect(deck.currentVersion).toBe(1);
+    await expect((await write("/api/decks", owner.cookie, createBody)).json()).resolves.toMatchObject({
+      deck: { id: deck.id, currentVersion: 1 }, duplicate: true,
+    });
+    expect((await api(`/api/decks/${deck.id}`, other.cookie)).status).toBe(404);
+
+    const save = await api(`/api/decks/${deck.id}`, owner.cookie, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Origin: "http://example.com" },
+      body: JSON.stringify({ ...createBody, operationId: crypto.randomUUID(), expectedVersion: 1, name: "更新后的牌组" }),
+    });
+    expect(save.status).toBe(200);
+    await expect(save.json()).resolves.toMatchObject({ deck: { currentVersion: 2 } });
+
+    const conflict = await api(`/api/decks/${deck.id}`, owner.cookie, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Origin: "http://example.com" },
+      body: JSON.stringify({ ...createBody, operationId: crypto.randomUUID(), expectedVersion: 1 }),
+    });
+    expect(conflict.status).toBe(409);
+    await expect(conflict.json()).resolves.toMatchObject({ currentVersion: 2 });
+
+    expect((await api(`/api/custom-cards/${card.id}`, owner.cookie, {
+      method: "DELETE", headers: { Origin: "http://example.com" },
+    })).status).toBe(200);
+    const detail = await (await api(`/api/decks/${deck.id}`, owner.cookie)).json() as { deck: { snapshot: { cards: Array<{ snapshot?: { title: string } }> } } };
+    expect(detail.deck.snapshot.cards[1].snapshot?.title).toBe("再来一杆");
   });
 
   it("imports local resources idempotently and scopes stable local IDs per account", async () => {

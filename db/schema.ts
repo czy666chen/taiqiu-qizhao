@@ -199,6 +199,28 @@ export const decks = sqliteTable(
   ],
 );
 
+export const customCards = sqliteTable(
+  "custom_cards",
+  {
+    id: text("id").primaryKey(),
+    ownerUserId: text("owner_user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    title: text("title").notNull(),
+    effect: text("effect").notNull(),
+    defaultQuantity: integer("default_quantity").notNull().default(1),
+    safetyLevel: text("safety_level", { enum: ["low", "medium", "review"] }).notNull().default("low"),
+    safetyNote: text("safety_note"),
+    ...timestamps,
+    deletedAt: integer("deleted_at"),
+  },
+  (table) => [
+    index("custom_cards_owner_deleted_updated_idx").on(table.ownerUserId, table.deletedAt, table.updatedAt),
+    check("custom_cards_quantity_ck", sql`${table.defaultQuantity} between 1 and 10`),
+    check("custom_cards_safety_level_ck", sql`${table.safetyLevel} in ('low', 'medium', 'review')`),
+  ],
+);
+
 export const deckVersions = sqliteTable(
   "deck_versions",
   {
@@ -209,6 +231,7 @@ export const deckVersions = sqliteTable(
     versionNo: integer("version_no").notNull(),
     snapshotJson: text("snapshot_json").notNull(),
     checksum: text("checksum").notNull(),
+    operationId: text("operation_id"),
     createdByUserId: text("created_by_user_id").references(() => users.id, {
       onDelete: "set null",
       onUpdate: "cascade",
@@ -217,6 +240,7 @@ export const deckVersions = sqliteTable(
   },
   (table) => [
     uniqueIndex("deck_versions_deck_version_uq").on(table.deckId, table.versionNo),
+    uniqueIndex("deck_versions_operation_uq").on(table.operationId),
     check("deck_versions_snapshot_json_ck", sql`json_valid(${table.snapshotJson})`),
     check("deck_versions_version_ck", sql`${table.versionNo} >= 1`),
   ],

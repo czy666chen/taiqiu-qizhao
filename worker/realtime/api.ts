@@ -6,6 +6,7 @@ import type { ChaseScoreRule, ChaseScoreState } from "./chase-scoring";
 import { hydrateEightBallState, type RealtimeEightBallState } from "./eight-ball-scoring";
 import { initRoomCards, type RoomCardMode, type RoomCardState } from "./room-cards";
 import { OFFICIAL_DECKS, type OfficialDeckId } from "../../src/lib/official-decks";
+import { parseDeckSnapshot, type DeckRef, type DeckSnapshot } from "../../src/lib/custom-decks";
 
 export type RealtimeEnv = AuthEnv & {
   MATCH_ROOM: DurableObjectNamespace<MatchRoom>;
@@ -174,6 +175,8 @@ type DirectDraft =
 type DirectCardDraft = {
   cardMode: Exclude<RoomCardMode, "none">;
   deckId: OfficialDeckId;
+  deckRef: DeckRef;
+  deckSnapshot?: DeckSnapshot;
   handSizes: number[];
 };
 
@@ -185,11 +188,34 @@ function directCardDraft(body: Record<string, unknown>, playerCount: number): Di
   const deckId = typeof body.deckId === "string" && OFFICIAL_DECKS.some((deck) => deck.id === body.deckId)
     ? body.deckId as OfficialDeckId
     : "complete";
+  const rawRef = body.deckRef;
+  let deckRef: DeckRef = { kind: "official", id: "complete", version: 1 };
+  if (rawRef && typeof rawRef === "object" && !Array.isArray(rawRef)) {
+    const ref = rawRef as Record<string, unknown>;
+    if (ref.kind === "user") {
+      deckRef = { kind: "user", deckId: uuid(ref.deckId, "deckRef.deckId"), versionNo: safeInteger(ref.versionNo, -1) };
+      if (deckRef.versionNo < 1) throw new RealtimeValidationError("deckRef.versionNo 无效");
+    } else if (ref.kind !== "official" || ref.id !== "complete" || ref.version !== 1) {
+      throw new RealtimeValidationError("deckRef 无效");
+    }
+  }
   const rawHandSizes = Array.isArray(body.handSizes) ? body.handSizes : [];
   if (rawHandSizes.length !== playerCount) throw new RealtimeValidationError("handSizes 无效");
   const handSizes = rawHandSizes.map((value) => safeInteger(value, -1));
   if (handSizes.some((value) => value < 0 || value > 10)) throw new RealtimeValidationError("handSizes 无效");
-  return { cardMode, deckId, handSizes };
+  return { cardMode, deckId, deckRef, handSizes };
+}
+
+async function resolveDirectDeck(env: RealtimeEnv, userId: string, cards: DirectCardDraft | undefined): Promise<void> {
+  if (!cards || cards.deckRef.kind === "official") return;
+  const row = await env.DB.prepare(
+    `SELECT dv.snapshot_json FROM deck_versions dv JOIN decks d ON d.id = dv.deck_id
+      WHERE d.id = ?1 AND d.owner_user_id = ?2 AND d.deleted_at IS NULL AND dv.version_no = ?3`,
+  ).bind(cards.deckRef.deckId, userId, cards.deckRef.versionNo).first<string>("snapshot_json");
+  if (!row) throw new RealtimeValidationError("牌组不存在或不属于当前账号");
+  const snapshot = parseDeckSnapshot(JSON.parse(row));
+  if (!snapshot) throw new RealtimeValidationError("牌组快照无效");
+  cards.deckSnapshot = snapshot;
 }
 
 function directDraft(body: Record<string, unknown>): DirectDraft {
@@ -244,7 +270,7 @@ function directDraftBaseline(draft: DirectDraft, playerIds: string[], now: numbe
       raceTo: draft.raceTo,
       firstServerId: playerIds[draft.firstServer],
       serveRule: draft.serveRule,
-      cards: draft.cards ? { cardMode: draft.cards.cardMode, deckId: draft.cards.deckId, handSizes: draft.cards.handSizes } : undefined,
+      cards: draft.cards ? { cardMode: draft.cards.cardMode, deckId: draft.cards.deckId, deckSnapshot: draft.cards.deckSnapshot, handSizes: draft.cards.handSizes } : undefined,
       startedAt: now,
       events: [],
     });
@@ -263,7 +289,7 @@ function directDraftBaseline(draft: DirectDraft, playerIds: string[], now: numbe
     rules: draft.rules,
     currentPlayerId: playerIds[0],
     turnStrategy: draft.turnStrategy,
-    cards: draft.cards ? { cardMode: draft.cards.cardMode, deckId: draft.cards.deckId, handSizes: draft.cards.handSizes } : undefined,
+    cards: draft.cards ? { cardMode: draft.cards.cardMode, deckId: draft.cards.deckId, deckSnapshot: draft.cards.deckSnapshot, handSizes: draft.cards.handSizes } : undefined,
   });
 }
 
@@ -357,7 +383,10 @@ function loadDraftCards(snapshot: Record<string, unknown> | undefined, playerIds
   const deckId = typeof cards.deckId === "string" && OFFICIAL_DECKS.some((deck) => deck.id === cards.deckId)
     ? cards.deckId as OfficialDeckId
     : "complete";
-  return initRoomCards({ deckId, playerIds, handSizes });
+  const deckSnapshot = cards.deckSnapshot && typeof cards.deckSnapshot === "object" && !Array.isArray(cards.deckSnapshot)
+    ? cards.deckSnapshot as unknown as DeckSnapshot
+    : undefined;
+  return initRoomCards({ deckId, deckSnapshot, playerIds, handSizes });
 }
 
 async function loadChaseScoreState(env: RealtimeEnv, matchId: string): Promise<ChaseScoreState | undefined> {
@@ -560,6 +589,7 @@ async function createDirectRoom(request: Request, env: RealtimeEnv, context: Rea
   const body = await readJson(request);
   const requestOperationId = operationId(body.operationId);
   const draft = directDraft(body);
+  await resolveDirectDeck(env, session.user.id, draft.cards);
   const matchId = await scopedUuid("hei8-direct-room", `${session.user.id}:${requestOperationId}`);
   context.matchId = matchId;
 

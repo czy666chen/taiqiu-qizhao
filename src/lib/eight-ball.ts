@@ -1,6 +1,7 @@
 import { CardMode, createMatchCardState, MatchCardFilter, MatchCardState, redealMatchCardState } from "./match";
 import { secureRandomIndex } from "./deck";
 import { OfficialDeckId } from "./official-decks";
+import type { DeckSnapshot } from "./custom-decks";
 
 export type EightBallLayout = "stacked" | "split";
 export type EightBallWinType = "normal" | "break_clear" | "runout";
@@ -73,6 +74,7 @@ export interface EightBallDraft {
   initialHandSize?: number;
   initialHandSizes?: [number, number];
   deckId?: OfficialDeckId;
+  deckSnapshot?: DeckSnapshot;
   cardFilter?: Partial<MatchCardFilter>;
 }
 
@@ -110,6 +112,7 @@ export function createEightBallMatch(draft: EightBallDraft, now = Date.now(), ra
       initialHandSize: draft.initialHandSize ?? 0,
       initialHandSizes: draft.initialHandSizes,
       deckId: draft.deckId,
+      deckSnapshot: draft.deckSnapshot,
       cardFilter: draft.cardFilter,
     }, randomIndex)
     : undefined;

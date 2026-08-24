@@ -9,11 +9,25 @@ import {
   setExcludedDefinitions,
   skipCard,
 } from "./deck";
+import { CARD_DEFINITIONS } from "../data/cards";
+import { parseDeckSnapshot } from "./custom-decks";
 
 const first = () => 0;
 
 describe("卡牌核心逻辑", () => {
   it("总卡牌实例数量为 51", () => expect(createDeck()).toHaveLength(51));
+
+  it("官方卡牌 ID 固定且不重复", () => {
+    expect(CARD_DEFINITIONS).toHaveLength(50);
+    expect(new Set(CARD_DEFINITIONS.map((card) => card.id)).size).toBe(CARD_DEFINITIONS.length);
+    expect(CARD_DEFINITIONS.every((card, index) => card.id === `card-${String(index + 1).padStart(3, "0")}`)).toBe(true);
+  });
+
+  it("拒绝伪造或超额的牌组快照", () => {
+    expect(parseDeckSnapshot({ formatVersion: 1, name: "有效", cards: [{ source: "official", definitionId: "card-001", quantity: 1 }] })).not.toBeNull();
+    expect(parseDeckSnapshot({ formatVersion: 1, name: "伪造", cards: [{ source: "official", definitionId: "card-999", quantity: 1 }] })).toBeNull();
+    expect(parseDeckSnapshot({ formatVersion: 1, name: "超额", cards: [{ source: "official", definitionId: "card-001", quantity: 11 }] })).toBeNull();
+  });
 
   it("无懈可击有两个不同实例和显示编号", () => {
     const cards = createDeck().filter((item) => item.title === "无懈可击");

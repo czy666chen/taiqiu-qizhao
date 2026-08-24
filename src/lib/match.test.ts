@@ -36,6 +36,25 @@ const draft = {
 };
 
 describe("追分对局", () => {
+  it("使用固化的混合牌组快照创建对局", () => {
+    const match = createMatch({
+      ...draft,
+      mode: "cards",
+      cardMode: "independent",
+      initialHandSize: 1,
+      deckSnapshot: {
+        formatVersion: 1,
+        name: "周五朋友局",
+        cards: [
+          { source: "official", definitionId: "card-001", quantity: 1 },
+          { source: "custom", definitionId: "custom-1", quantity: 1, snapshot: { title: "再来一杆", effect: "再打一杆", safetyLevel: "low" } },
+        ],
+      },
+    }, 100, first);
+    expect(match.cards?.deckSnapshot).toMatchObject({ name: "周五朋友局", source: "user", cardCount: 2 });
+    expect([...match.cards!.remaining, ...Object.values(match.cards!.hands).flat()].map((card) => card.title).sort()).toEqual(["再来一杆", "落井下石"]);
+  });
+
   it("uses the 14710 rules as the default score preset", () => {
     expect(DEFAULT_RULES.map((rule) => [rule.id, rule.value])).toEqual([
       ["foul", 1],

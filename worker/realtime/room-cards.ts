@@ -1,5 +1,6 @@
 import { createDeck, secureRandomIndex, type CardInstance } from "../../src/lib/deck";
 import { getOfficialDeck, type OfficialDeckId } from "../../src/lib/official-decks";
+import { deckSnapshotInstances, type DeckSnapshot } from "../../src/lib/custom-decks";
 import type { JsonObject, JsonValue } from "./chase-scoring";
 
 export type RoomCardMode = "none" | "independent";
@@ -15,13 +16,14 @@ export type RoomCardEvent = {
 
 export type RoomCardState = {
   mode: "independent";
-  deckId: OfficialDeckId;
+  deckId: string;
   deckSnapshot: {
-    id: OfficialDeckId;
-    version: 1;
+    id: string;
+    version: number;
     name: string;
     definitionIds: string[];
     cardCount: number;
+    source?: "official" | "user";
   };
   remaining: CardInstance[];
   used: CardInstance[];
@@ -84,12 +86,15 @@ function eventPayload(event: RoomCardEvent): JsonObject {
 
 export function initRoomCards(input: {
   deckId?: OfficialDeckId;
+  deckSnapshot?: DeckSnapshot;
   playerIds: string[];
   handSizes: number[];
   randomIndex?: typeof secureRandomIndex;
 }): RoomCardState {
   const officialDeck = getOfficialDeck(input.deckId);
-  let remaining = createDeck().filter((card) => officialDeck.definitionIds.includes(card.definitionId));
+  let remaining = input.deckSnapshot
+    ? deckSnapshotInstances(input.deckSnapshot)
+    : createDeck().filter((card) => officialDeck.definitionIds.includes(card.definitionId));
   const cardCount = remaining.length;
   const hands: Record<string, CardInstance[]> = {};
   const initialHandSizes: Record<string, number> = {};
@@ -102,13 +107,14 @@ export function initRoomCards(input: {
   });
   return {
     mode: "independent",
-    deckId: officialDeck.id,
+    deckId: input.deckSnapshot ? "user" : officialDeck.id,
     deckSnapshot: {
-      id: officialDeck.id,
-      version: officialDeck.version,
-      name: officialDeck.name,
-      definitionIds: [...officialDeck.definitionIds],
+      id: input.deckSnapshot ? "user" : officialDeck.id,
+      version: input.deckSnapshot?.formatVersion ?? officialDeck.version,
+      name: input.deckSnapshot?.name ?? officialDeck.name,
+      definitionIds: Array.from(new Set(remaining.map((card) => card.definitionId))),
       cardCount,
+      source: input.deckSnapshot ? "user" : "official",
     },
     remaining,
     used: [],

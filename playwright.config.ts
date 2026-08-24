@@ -5,6 +5,8 @@ const systemEdge = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedg
 const localLaunchOptions = process.platform === "win32" && existsSync(systemEdge)
   ? { executablePath: systemEdge }
   : {};
+const externalBaseUrl = process.env.E2E_BASE_URL;
+const baseURL = externalBaseUrl ?? "http://127.0.0.1:4173";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -15,7 +17,7 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? "github" : "list",
   use: {
-    baseURL: "http://127.0.0.1:4173",
+    baseURL,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
   },
@@ -23,7 +25,7 @@ export default defineConfig({
     { name: "desktop-chromium", use: { ...devices["Desktop Chrome"], launchOptions: localLaunchOptions } },
     { name: "mobile-chromium", use: { ...devices["Pixel 7"], launchOptions: localLaunchOptions } },
   ],
-  webServer: {
+  webServer: externalBaseUrl ? undefined : {
     command: "npm run dev:static -- --host 127.0.0.1 --port 4173",
     url: "http://127.0.0.1:4173",
     reuseExistingServer: !process.env.CI,

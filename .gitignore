@@ -49,6 +49,7 @@ next-env.d.ts
 /outputs/
 /work/
 /backups/
+/.tools/
 /.agents/
 /.dsh/
 /docs/
@@ -56,3 +57,5 @@ next-env.d.ts
 /*ROADMAP*.md
 /*PLAN*.md
 wrangler.jsonc.bak-*
+# Added by code-review-graph
+.code-review-graph/

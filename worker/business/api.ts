@@ -1,5 +1,8 @@
 import type { AuthEnv } from "../auth/api";
 import { requireMatchRead, requireMatchWriteLease, requireSession } from "./authorization";
+import { findSession } from "../auth/session";
+import { CARD_DEFINITIONS, getCardSafetyLevel } from "../../src/data/cards";
+import { DECK_LIMITS, type CardSafetyLevel, type DeckSnapshot, type DeckSnapshotCard } from "../../src/lib/custom-decks";
 
 const MAX_JSON_BYTES = 64 * 1024;
 const LEASE_DURATION_MS = 15 * 60 * 1000;
@@ -174,6 +177,267 @@ async function listOwned(request: Request, env: AuthEnv, resource: "presets" | "
     : "SELECT id, name, visibility, current_version, updated_at FROM decks WHERE owner_user_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC";
   const result = await env.DB.prepare(sql).bind(session.user.id).all();
   return json({ [resource]: result.results });
+}
+
+function trimmedString(body: Record<string, unknown>, name: string, maxLength: number, optional = false): string | undefined {
+  const value = body[name];
+  if (optional && (value === undefined || value === null || value === "")) return undefined;
+  if (typeof value !== "string") throw new BusinessValidationError(`${name} 无效`);
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > maxLength) throw new BusinessValidationError(`${name} 无效`);
+  return trimmed;
+}
+
+function safetyLevel(value: unknown): CardSafetyLevel {
+  if (value !== "low" && value !== "medium" && value !== "review") {
+    throw new BusinessValidationError("safetyLevel 无效");
+  }
+  return value;
+}
+
+async function cardCatalog(request: Request, env: AuthEnv): Promise<Response> {
+  const session = await findSession(env, request);
+  const custom = session ? await env.DB.prepare(
+    `SELECT id, title, effect, default_quantity, safety_level, safety_note, created_at, updated_at
+       FROM custom_cards
+      WHERE owner_user_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC`,
+  ).bind(session.user.id).all() : { results: [] };
+  return json({
+    officialVersion: 1,
+    officialCards: CARD_DEFINITIONS.map((card) => ({
+      id: card.id,
+      title: card.title,
+      effect: card.effect,
+      count: card.count,
+      safetyLevel: getCardSafetyLevel(card),
+      ...(card.safetyNote ? { safetyNote: card.safetyNote } : {}),
+    })),
+    customCards: custom.results,
+  });
+}
+
+async function listCustomCards(request: Request, env: AuthEnv): Promise<Response> {
+  const session = await requireSession(env, request);
+  const result = await env.DB.prepare(
+    `SELECT id, title, effect, default_quantity, safety_level, safety_note, created_at, updated_at
+       FROM custom_cards WHERE owner_user_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC`,
+  ).bind(session.user.id).all();
+  return json({ customCards: result.results });
+}
+
+function customCardFields(body: Record<string, unknown>) {
+  const defaultQuantity = body.defaultQuantity === undefined ? 1 : integerField(body, "defaultQuantity");
+  if (defaultQuantity < 1 || defaultQuantity > DECK_LIMITS.quantityPerCard) {
+    throw new BusinessValidationError("defaultQuantity 无效");
+  }
+  return {
+    title: trimmedString(body, "title", DECK_LIMITS.cardTitle)!,
+    effect: trimmedString(body, "effect", DECK_LIMITS.cardEffect)!,
+    defaultQuantity,
+    safetyLevel: safetyLevel(body.safetyLevel ?? "low"),
+    safetyNote: trimmedString(body, "safetyNote", DECK_LIMITS.safetyNote, true) ?? null,
+  };
+}
+
+async function createCustomCard(request: Request, env: AuthEnv): Promise<Response> {
+  requireSameOrigin(request);
+  const session = await requireSession(env, request);
+  const body = await readJson(request);
+  const fields = customCardFields(body);
+  const count = await env.DB.prepare(
+    "SELECT count(*) AS total FROM custom_cards WHERE owner_user_id = ?1 AND deleted_at IS NULL",
+  ).bind(session.user.id).first<number>("total") ?? 0;
+  if (count >= DECK_LIMITS.customCardsPerUser) return json({ error: "自定义卡牌已达到上限" }, 409);
+  const card = { id: crypto.randomUUID(), ...fields, createdAt: Date.now(), updatedAt: Date.now() };
+  await env.DB.prepare(
+    `INSERT INTO custom_cards
+      (id, owner_user_id, title, effect, default_quantity, safety_level, safety_note, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)`,
+  ).bind(card.id, session.user.id, fields.title, fields.effect, fields.defaultQuantity, fields.safetyLevel, fields.safetyNote, card.createdAt).run();
+  return json({ customCard: card }, 201);
+}
+
+async function updateCustomCard(request: Request, env: AuthEnv, id: string): Promise<Response> {
+  requireSameOrigin(request);
+  const session = await requireSession(env, request);
+  const fields = customCardFields(await readJson(request));
+  const updatedAt = Date.now();
+  const result = await env.DB.prepare(
+    `UPDATE custom_cards SET title = ?1, effect = ?2, default_quantity = ?3,
+       safety_level = ?4, safety_note = ?5, updated_at = ?6
+     WHERE id = ?7 AND owner_user_id = ?8 AND deleted_at IS NULL`,
+  ).bind(fields.title, fields.effect, fields.defaultQuantity, fields.safetyLevel, fields.safetyNote, updatedAt, id, session.user.id).run();
+  if ((result.meta.changes ?? 0) !== 1) return json({ error: "自定义卡牌不存在" }, 404);
+  return json({ customCard: { id, ...fields, updatedAt } });
+}
+
+async function deleteCustomCard(request: Request, env: AuthEnv, id: string): Promise<Response> {
+  requireSameOrigin(request);
+  const session = await requireSession(env, request);
+  const now = Date.now();
+  const result = await env.DB.prepare(
+    "UPDATE custom_cards SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2 AND owner_user_id = ?3 AND deleted_at IS NULL",
+  ).bind(now, id, session.user.id).run();
+  if ((result.meta.changes ?? 0) !== 1) return json({ error: "自定义卡牌不存在" }, 404);
+  return json({ deleted: true, id });
+}
+
+type CustomCardRow = { id: string; title: string; effect: string; safety_level: CardSafetyLevel; safety_note: string | null };
+
+async function canonicalDeckSnapshot(env: AuthEnv, userId: string, body: Record<string, unknown>): Promise<DeckSnapshot> {
+  const name = trimmedString(body, "name", DECK_LIMITS.deckName)!;
+  if (!Array.isArray(body.cards) || body.cards.length < 1 || body.cards.length > DECK_LIMITS.cardKindsPerDeck) {
+    throw new BusinessValidationError("cards 无效");
+  }
+  const requested: Array<{ source: "official" | "custom"; definitionId: string; quantity: number }> = body.cards.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw new BusinessValidationError("cards 无效");
+    const card = item as Record<string, unknown>;
+    if (card.source !== "official" && card.source !== "custom") throw new BusinessValidationError("cards 无效");
+    const definitionId = trimmedString(card, "definitionId", 64)!;
+    const quantity = integerField(card, "quantity");
+    if (quantity < 1 || quantity > DECK_LIMITS.quantityPerCard) throw new BusinessValidationError("quantity 无效");
+    return { source: card.source as "official" | "custom", definitionId, quantity };
+  });
+  if (new Set(requested.map((card) => `${card.source}:${card.definitionId}`)).size !== requested.length) {
+    throw new BusinessValidationError("牌组中存在重复卡牌");
+  }
+  if (requested.reduce((sum, card) => sum + card.quantity, 0) > DECK_LIMITS.cardInstancesPerDeck) {
+    throw new BusinessValidationError("牌组卡牌总数超过上限");
+  }
+  const officialIds = new Set(CARD_DEFINITIONS.map((card) => card.id));
+  if (requested.some((card) => card.source === "official" && !officialIds.has(card.definitionId))) {
+    throw new BusinessValidationError("官方卡牌不存在");
+  }
+  const customIds = requested.filter((card) => card.source === "custom").map((card) => card.definitionId);
+  const customRows = customIds.length ? await env.DB.prepare(
+    `SELECT id, title, effect, safety_level, safety_note FROM custom_cards
+      WHERE owner_user_id = ?1 AND deleted_at IS NULL AND id IN (${customIds.map((_, index) => `?${index + 2}`).join(",")})`,
+  ).bind(userId, ...customIds).all<CustomCardRow>() : { results: [] as CustomCardRow[] };
+  const customById = new Map(customRows.results.map((card) => [card.id, card]));
+  if (customById.size !== customIds.length) throw new BusinessValidationError("自定义卡牌不存在或不属于当前账号");
+  const cards: DeckSnapshotCard[] = requested.map((card): DeckSnapshotCard => {
+    if (card.source === "official") return { source: "official", definitionId: card.definitionId, quantity: card.quantity };
+    const custom = customById.get(card.definitionId)!;
+    return {
+      source: "custom",
+      definitionId: card.definitionId,
+      quantity: card.quantity,
+      snapshot: {
+        title: custom.title,
+        effect: custom.effect,
+        safetyLevel: custom.safety_level,
+        ...(custom.safety_note ? { safetyNote: custom.safety_note } : {}),
+      },
+    };
+  });
+  return { formatVersion: 1, name, cards };
+}
+
+async function findDeckOperation(env: AuthEnv, userId: string, operationId: string) {
+  return env.DB.prepare(
+    `SELECT d.id AS deck_id, d.current_version, dv.version_no
+       FROM deck_versions dv JOIN decks d ON d.id = dv.deck_id
+      WHERE d.owner_user_id = ?1 AND dv.operation_id = ?2`,
+  ).bind(userId, operationId).first<{ deck_id: string; current_version: number; version_no: number }>();
+}
+
+async function createDeckResource(request: Request, env: AuthEnv): Promise<Response> {
+  requireSameOrigin(request);
+  const session = await requireSession(env, request);
+  const body = await readJson(request);
+  const operationId = uuidField(body, "operationId");
+  const duplicate = await findDeckOperation(env, session.user.id, operationId);
+  if (duplicate) return json({ deck: { id: duplicate.deck_id, currentVersion: duplicate.version_no }, duplicate: true });
+  const count = await env.DB.prepare("SELECT count(*) AS total FROM decks WHERE owner_user_id = ?1 AND deleted_at IS NULL")
+    .bind(session.user.id).first<number>("total") ?? 0;
+  if (count >= DECK_LIMITS.decksPerUser) return json({ error: "牌组已达到上限" }, 409);
+  const snapshot = await canonicalDeckSnapshot(env, session.user.id, body);
+  const snapshotJson = JSON.stringify(snapshot);
+  const deckId = crypto.randomUUID();
+  const versionId = crypto.randomUUID();
+  const now = Date.now();
+  try {
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO decks (id, owner_user_id, name, current_version, created_at, updated_at) VALUES (?1, ?2, ?3, 1, ?4, ?4)",
+      ).bind(deckId, session.user.id, snapshot.name, now),
+      env.DB.prepare(
+        `INSERT INTO deck_versions (id, deck_id, version_no, snapshot_json, checksum, operation_id, created_by_user_id, created_at)
+         VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, ?7)`,
+      ).bind(versionId, deckId, snapshotJson, await sha256(snapshotJson), operationId, session.user.id, now),
+    ]);
+  } catch (error) {
+    const raced = await findDeckOperation(env, session.user.id, operationId);
+    if (raced) return json({ deck: { id: raced.deck_id, currentVersion: raced.version_no }, duplicate: true });
+    throw error;
+  }
+  return json({ deck: { id: deckId, name: snapshot.name, currentVersion: 1, snapshot } }, 201);
+}
+
+async function getDeckResource(request: Request, env: AuthEnv, id: string): Promise<Response> {
+  const session = await requireSession(env, request);
+  const row = await env.DB.prepare(
+    `SELECT d.id, d.name, d.current_version, d.updated_at, dv.snapshot_json
+       FROM decks d LEFT JOIN deck_versions dv ON dv.deck_id = d.id AND dv.version_no = d.current_version
+      WHERE d.id = ?1 AND d.owner_user_id = ?2 AND d.deleted_at IS NULL`,
+  ).bind(id, session.user.id).first<{ id: string; name: string; current_version: number; updated_at: number; snapshot_json: string | null }>();
+  return row ? json({ deck: { id: row.id, name: row.name, currentVersion: row.current_version, updatedAt: row.updated_at, snapshot: row.snapshot_json ? JSON.parse(row.snapshot_json) : null } }) : json({ error: "牌组不存在" }, 404);
+}
+
+async function saveDeckResource(request: Request, env: AuthEnv, id: string): Promise<Response> {
+  requireSameOrigin(request);
+  const session = await requireSession(env, request);
+  const body = await readJson(request);
+  const operationId = uuidField(body, "operationId");
+  const duplicate = await findDeckOperation(env, session.user.id, operationId);
+  if (duplicate) return duplicate.deck_id === id
+    ? json({ deck: { id, currentVersion: duplicate.version_no }, duplicate: true })
+    : json({ error: "operationId 已被其他牌组使用" }, 409);
+  const expected = integerField(body, "expectedVersion");
+  const deck = await env.DB.prepare(
+    "SELECT current_version FROM decks WHERE id = ?1 AND owner_user_id = ?2 AND deleted_at IS NULL",
+  ).bind(id, session.user.id).first<{ current_version: number }>();
+  if (!deck) return json({ error: "牌组不存在" }, 404);
+  if (deck.current_version !== expected) return json({ error: "版本冲突，请先刷新", currentVersion: deck.current_version }, 409);
+  const snapshot = await canonicalDeckSnapshot(env, session.user.id, body);
+  const snapshotJson = JSON.stringify(snapshot);
+  const nextVersion = expected + 1;
+  const now = Date.now();
+  let results;
+  try {
+    results = await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE decks SET name = ?1, current_version = ?2, updated_at = ?3
+        WHERE id = ?4 AND owner_user_id = ?5 AND current_version = ?6 AND deleted_at IS NULL`,
+    ).bind(snapshot.name, nextVersion, now, id, session.user.id, expected),
+    env.DB.prepare(
+      `INSERT INTO deck_versions (id, deck_id, version_no, snapshot_json, checksum, operation_id, created_by_user_id, created_at)
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
+        WHERE EXISTS (SELECT 1 FROM decks WHERE id = ?2 AND owner_user_id = ?7 AND current_version = ?3)`,
+    ).bind(crypto.randomUUID(), id, nextVersion, snapshotJson, await sha256(snapshotJson), operationId, session.user.id, now),
+    ]);
+  } catch (error) {
+    const raced = await findDeckOperation(env, session.user.id, operationId);
+    if (raced?.deck_id === id) return json({ deck: { id, currentVersion: raced.version_no }, duplicate: true });
+    throw error;
+  }
+  if ((results[0].meta.changes ?? 0) !== 1 || (results[1].meta.changes ?? 0) !== 1) {
+    const current = await env.DB.prepare("SELECT current_version FROM decks WHERE id = ?1 AND owner_user_id = ?2")
+      .bind(id, session.user.id).first<number>("current_version");
+    return json({ error: "版本冲突，请先刷新", currentVersion: current }, 409);
+  }
+  return json({ deck: { id, name: snapshot.name, currentVersion: nextVersion, snapshot } });
+}
+
+async function deleteDeckResource(request: Request, env: AuthEnv, id: string): Promise<Response> {
+  requireSameOrigin(request);
+  const session = await requireSession(env, request);
+  const now = Date.now();
+  const result = await env.DB.prepare(
+    "UPDATE decks SET deleted_at = ?1, updated_at = ?1 WHERE id = ?2 AND owner_user_id = ?3 AND deleted_at IS NULL",
+  ).bind(now, id, session.user.id).run();
+  if ((result.meta.changes ?? 0) !== 1) return json({ error: "牌组不存在" }, 404);
+  return json({ deleted: true, id });
 }
 
 async function getOwned(request: Request, env: AuthEnv, resource: "presets" | "decks", id: string): Promise<Response> {
@@ -628,14 +892,25 @@ export async function handleBusinessApiRequest(request: Request, env: AuthEnv): 
     if (pathname === "/api/devices" && request.method === "POST") return await registerDevice(request, env);
     if (pathname === "/api/history" && request.method === "GET") return await listHistory(request, env);
     if (pathname === "/api/contacts" && request.method === "GET") return await listContacts(request, env);
+    if (pathname === "/api/card-catalog" && request.method === "GET") return await cardCatalog(request, env);
+    if (pathname === "/api/custom-cards" && request.method === "GET") return await listCustomCards(request, env);
+    if (pathname === "/api/custom-cards" && request.method === "POST") return await createCustomCard(request, env);
     if (pathname === "/api/presets" && request.method === "GET") return await listOwned(request, env, "presets");
     if (pathname === "/api/decks" && request.method === "GET") return await listOwned(request, env, "decks");
+    if (pathname === "/api/decks" && request.method === "POST") return await createDeckResource(request, env);
     if (pathname === "/api/matches" && request.method === "POST") return await createMatch(request, env);
     if (pathname === "/api/migrations/local" && request.method === "POST") return await importLocalResource(request, env);
     if (pathname === "/api/sync/receipts" && request.method === "GET") return await listReceipts(request, env);
 
+    const customCard = pathname.match(/^\/api\/custom-cards\/([0-9a-f-]{36})$/);
+    if (customCard && request.method === "PATCH") return await updateCustomCard(request, env, customCard[1]);
+    if (customCard && request.method === "DELETE") return await deleteCustomCard(request, env, customCard[1]);
     const owned = pathname.match(/^\/api\/(presets|decks)\/([0-9a-f-]{36})$/);
-    if (owned && request.method === "GET") return await getOwned(request, env, owned[1] as "presets" | "decks", owned[2]);
+    if (owned && request.method === "GET") return owned[1] === "decks"
+      ? await getDeckResource(request, env, owned[2])
+      : await getOwned(request, env, "presets", owned[2]);
+    if (owned?.[1] === "decks" && request.method === "PUT") return await saveDeckResource(request, env, owned[2]);
+    if (owned?.[1] === "decks" && request.method === "DELETE") return await deleteDeckResource(request, env, owned[2]);
     const match = pathname.match(/^\/api\/matches\/([0-9a-f-]{36})$/);
     if (match && request.method === "GET") return await getMatch(request, env, match[1]);
     if (match && request.method === "DELETE") return await deleteMatch(request, env, match[1]);
