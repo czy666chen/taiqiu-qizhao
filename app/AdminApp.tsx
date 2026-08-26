@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { type AnchorHTMLAttributes, FormEvent, type MouseEvent, useEffect, useRef, useState } from "react";
 
 type Admin = { id: string; username: string };
 type UserSummary = {
@@ -99,11 +99,21 @@ function modeLabel(mode: string): string {
   return MODE_LABELS[mode] ?? mode;
 }
 
+function AdminLink({ href, navigate, onClick, ...props }: AnchorHTMLAttributes<HTMLAnchorElement> & { href: string; navigate: (path: string) => void }) {
+  const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+    onClick?.(event);
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    navigate(href);
+  };
+  return <a href={href} onClick={handleClick} {...props} />;
+}
+
 function ErrorNotice({ message }: { message: string }) {
   return message ? <p className="admin-error" role="alert">{message}</p> : null;
 }
 
-function LoginPage({ onAuthenticated }: { onAuthenticated: (admin: Admin) => void }) {
+function LoginPage({ onAuthenticated, navigate }: { onAuthenticated: (admin: Admin) => void; navigate: (path: string) => void }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -134,13 +144,13 @@ function LoginPage({ onAuthenticated }: { onAuthenticated: (admin: Admin) => voi
         <p className="admin-muted">管理员身份与普通用户完全隔离。</p>
         <form onSubmit={(event) => void submit(event)}>
           <label htmlFor="admin-username">管理员用户名</label>
-          <input id="admin-username" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required />
+          <input id="admin-username" name="username" autoComplete="username" spellCheck={false} value={username} onChange={(event) => setUsername(event.target.value)} required />
           <label htmlFor="admin-password">密码</label>
-          <input id="admin-password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+          <input id="admin-password" name="password" type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required />
           <ErrorNotice message={error} />
           <button className="admin-primary" disabled={busy}>{busy ? "正在验证…" : "进入后台"}</button>
         </form>
-        <button type="button" className="admin-home-link" onClick={() => window.location.assign("/")}>返回台球奇招</button>
+        <AdminLink className="admin-home-link" href="/" navigate={navigate}>返回台球奇招</AdminLink>
       </section>
     </main>
   );
@@ -180,8 +190,8 @@ function UsersPage({ navigate }: { navigate: (path: string) => void }) {
     <section className="admin-page" aria-labelledby="users-title">
       <header className="admin-page-heading"><div><p className="admin-eyebrow">ACCOUNTS</p><h1 id="users-title">用户管理</h1></div><span>{users.length} 个已加载账号</span></header>
       <form className="admin-filters" onSubmit={(event) => { event.preventDefault(); void load(); }}>
-        <label><span>用户名或昵称</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索账号" /></label>
-        <label><span>账号状态</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">全部状态</option><option value="active">正常</option><option value="disabled">已禁用</option><option value="deleted">已删除</option></select></label>
+        <label><span>用户名或昵称</span><input name="user-query" autoComplete="off" spellCheck={false} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="例如：小王…" /></label>
+        <label><span>账号状态</span><select name="user-status" autoComplete="off" value={status} onChange={(event) => setStatus(event.target.value)}><option value="">全部状态</option><option value="active">正常</option><option value="disabled">已禁用</option><option value="deleted">已删除</option></select></label>
         <button className="admin-primary" disabled={busy}>查询</button>
       </form>
       <ErrorNotice message={error} />
@@ -189,7 +199,7 @@ function UsersPage({ navigate }: { navigate: (path: string) => void }) {
       <div className="admin-table-wrap">
         <table className="admin-table">
           <thead><tr><th>用户</th><th>公开编号</th><th>状态</th><th>战绩</th><th>最近比赛</th><th><span className="admin-sr-only">操作</span></th></tr></thead>
-          <tbody>{users.map((user) => <tr key={user.id}><td><button className="admin-link" onClick={() => navigate(`/admin/users/${user.id}`)}><b>{user.nickname}</b><small>@{user.username}</small></button></td><td>{user.publicCode}</td><td><span className={`admin-status ${user.status}`}>{statusLabel(user.status)}</span></td><td>{user.matchCount}</td><td>{dateTime(user.lastMatchAt)}</td><td><button className="admin-quiet" onClick={() => navigate(`/admin/users/${user.id}`)}>查看详情</button></td></tr>)}</tbody>
+          <tbody>{users.map((user) => <tr key={user.id}><td><AdminLink className="admin-link" href={`/admin/users/${user.id}`} navigate={navigate}><b>{user.nickname}</b><small>@{user.username}</small></AdminLink></td><td>{user.publicCode}</td><td><span className={`admin-status ${user.status}`}>{statusLabel(user.status)}</span></td><td>{user.matchCount}</td><td>{dateTime(user.lastMatchAt)}</td><td><AdminLink className="admin-quiet" href={`/admin/users/${user.id}`} navigate={navigate}>查看详情</AdminLink></td></tr>)}</tbody>
         </table>
       </div>
       {busy && <p className="admin-loading" role="status">正在读取用户…</p>}
@@ -234,9 +244,9 @@ function ResetPasswordDialog({ user, onClose, onReset }: { user: UserDetail; onC
         {!newPassword ? <form onSubmit={(event) => void submit(event)}>
           <p className="admin-warning">这会立即注销该用户的所有旧会话。新密码只显示一次。</p>
           <label htmlFor="reset-admin-password">当前管理员密码</label>
-          <input id="reset-admin-password" type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required />
+          <input id="reset-admin-password" name="admin-password" type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required />
           <label htmlFor="reset-confirmation">输入目标用户名确认</label>
-          <input id="reset-confirmation" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={user.username} required />
+          <input id="reset-confirmation" name="target-username" autoComplete="off" spellCheck={false} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={`例如：${user.username}…`} required />
           <ErrorNotice message={error} />
           <div className="admin-dialog-actions"><button type="button" className="admin-quiet" onClick={onClose}>取消</button><button className="admin-danger" disabled={busy || confirmation !== user.username}>{busy ? "正在重置…" : "确认重置"}</button></div>
         </form> : <div className="admin-password-result">
@@ -261,17 +271,17 @@ function UserDetailPage({ userId, navigate }: { userId: string; navigate: (path:
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
   }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (error) return <section className="admin-page"><button className="admin-back" onClick={() => navigate("/admin/users")}>← 返回用户</button><ErrorNotice message={error} /></section>;
+  if (error) return <section className="admin-page"><AdminLink className="admin-back" href="/admin/users" navigate={navigate}>← 返回用户</AdminLink><ErrorNotice message={error} /></section>;
   if (!data) return <p className="admin-loading" role="status">正在读取用户详情…</p>;
   const { user } = data;
   return (
     <section className="admin-page">
-      <button className="admin-back" onClick={() => navigate("/admin/users")}>← 返回用户</button>
+      <AdminLink className="admin-back" href="/admin/users" navigate={navigate}>← 返回用户</AdminLink>
       <header className="admin-detail-heading"><div className="admin-avatar">{user.nickname.slice(0, 1)}</div><div><p className="admin-eyebrow">{user.publicCode}</p><h1>{user.nickname}</h1><p>@{user.username}</p></div><span className={`admin-status ${user.status}`}>{statusLabel(user.status)}</span></header>
       <div className="admin-metrics"><article><small>战绩</small><strong>{user.matchCount}</strong></article><article><small>有效会话</small><strong>{user.activeSessionCount}</strong></article><article><small>注册时间</small><strong>{dateTime(user.createdAt)}</strong></article><article><small>最近重置密码</small><strong>{dateTime(user.passwordResetAt)}</strong></article></div>
       {user.status === "active" && <button className="admin-danger" onClick={() => setResetOpen(true)}>重置用户密码</button>}
       <div className="admin-detail-grid">
-        <section className="admin-panel"><h2>最近战绩</h2>{data.recentMatches.length ? data.recentMatches.map((match) => <button className="admin-record" key={match.id} onClick={() => navigate(`/admin/matches/${match.id}`)}><span><b>{modeLabel(match.mode)}</b><small>{dateTime(match.createdAt)} · {match.isOwner ? "房主" : "参与者"}</small></span><span className={`admin-status ${match.status}`}>{statusLabel(match.status)}</span></button>) : <p className="admin-muted">暂无战绩</p>}</section>
+        <section className="admin-panel"><h2>最近战绩</h2>{data.recentMatches.length ? data.recentMatches.map((match) => <AdminLink className="admin-record" key={match.id} href={`/admin/matches/${match.id}`} navigate={navigate}><span><b>{modeLabel(match.mode)}</b><small>{dateTime(match.createdAt)} · {match.isOwner ? "房主" : "参与者"}</small></span><span className={`admin-status ${match.status}`}>{statusLabel(match.status)}</span></AdminLink>) : <p className="admin-muted">暂无战绩</p>}</section>
         <section className="admin-panel"><h2>最近认证事件</h2>{data.recentAuthEvents.length ? data.recentAuthEvents.map((event) => <article className="admin-record" key={event.id}><span><b>{event.action}</b><small>{dateTime(event.createdAt)}</small></span><span className={`admin-status ${event.outcome}`}>{event.outcome}</span></article>) : <p className="admin-muted">暂无认证事件</p>}</section>
       </div>
       {resetOpen && <ResetPasswordDialog user={user} onClose={() => setResetOpen(false)} onReset={() => void load()} />}
@@ -309,13 +319,13 @@ function MatchesPage({ navigate }: { navigate: (path: string) => void }) {
     <section className="admin-page" aria-labelledby="matches-title">
       <header className="admin-page-heading"><div><p className="admin-eyebrow">MATCH ARCHIVE</p><h1 id="matches-title">战绩管理</h1></div><span>{matches.length} 场已加载对局</span></header>
       <form className="admin-filters matches" onSubmit={(event) => { event.preventDefault(); void load(); }}>
-        <label><span>编号或玩家</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索战绩" /></label>
-        <label><span>模式</span><select value={mode} onChange={(event) => setMode(event.target.value)}><option value="">全部模式</option><option value="score">多人追分</option><option value="cards">奇招牌</option><option value="score_cards">追分 + 奇招牌</option><option value="chinese_eight">中式八球</option></select></label>
-        <label><span>状态</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">全部状态</option><option value="draft">草稿</option><option value="active">进行中</option><option value="completed">已完成</option><option value="cancelled">已取消</option></select></label>
+        <label><span>编号或玩家</span><input name="match-query" autoComplete="off" spellCheck={false} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="例如：房间编号或玩家昵称…" /></label>
+        <label><span>模式</span><select name="match-mode" autoComplete="off" value={mode} onChange={(event) => setMode(event.target.value)}><option value="">全部模式</option><option value="score">多人追分</option><option value="cards">奇招牌</option><option value="score_cards">追分 + 奇招牌</option><option value="chinese_eight">中式八球</option></select></label>
+        <label><span>状态</span><select name="match-status" autoComplete="off" value={status} onChange={(event) => setStatus(event.target.value)}><option value="">全部状态</option><option value="draft">草稿</option><option value="active">进行中</option><option value="completed">已完成</option><option value="cancelled">已取消</option></select></label>
         <button className="admin-primary" disabled={busy}>查询</button>
       </form>
       <ErrorNotice message={error} />
-      <div className="admin-match-list">{matches.map((match) => <button key={match.id} onClick={() => navigate(`/admin/matches/${match.id}`)}><div><span className="admin-mode">{modeLabel(match.mode)}</span>{match.isRealtime && <span className="admin-live">实时</span>}<span className={`admin-status ${match.status}`}>{statusLabel(match.status)}</span></div><h2>{match.players.map((player) => player.nickname ?? player.nicknameSnapshot).join(" · ") || "无玩家"}</h2><p>房主 {match.owner.nickname ?? match.owner.username ?? "已删除用户"} · {dateTime(match.createdAt)}</p><code>{match.id}</code></button>)}</div>
+      <div className="admin-match-list">{matches.map((match) => <AdminLink key={match.id} href={`/admin/matches/${match.id}`} navigate={navigate}><div><span className="admin-mode">{modeLabel(match.mode)}</span>{match.isRealtime && <span className="admin-live">实时</span>}<span className={`admin-status ${match.status}`}>{statusLabel(match.status)}</span></div><h2>{match.players.map((player) => player.nickname ?? player.nicknameSnapshot).join(" · ") || "无玩家"}</h2><p>房主 {match.owner.nickname ?? match.owner.username ?? "已删除用户"} · {dateTime(match.createdAt)}</p><code>{match.id}</code></AdminLink>)}</div>
       {!busy && !error && matches.length === 0 && <div className="admin-empty">没有符合条件的战绩</div>}
       {busy && <p className="admin-loading" role="status">正在读取战绩…</p>}
       {cursor && !busy && <button className="admin-more" onClick={() => void load(cursor)}>加载更多</button>}
@@ -332,12 +342,12 @@ function MatchDetailPage({ matchId, navigate }: { matchId: string; navigate: (pa
       .then(setData)
       .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "战绩详情读取失败"));
   }, [matchId]);
-  if (error) return <section className="admin-page"><button className="admin-back" onClick={() => navigate("/admin/matches")}>← 返回战绩</button><ErrorNotice message={error} /></section>;
+  if (error) return <section className="admin-page"><AdminLink className="admin-back" href="/admin/matches" navigate={navigate}>← 返回战绩</AdminLink><ErrorNotice message={error} /></section>;
   if (!data) return <p className="admin-loading" role="status">正在读取战绩详情…</p>;
   const { match } = data;
   return (
     <section className="admin-page">
-      <button className="admin-back" onClick={() => navigate("/admin/matches")}>← 返回战绩</button>
+      <AdminLink className="admin-back" href="/admin/matches" navigate={navigate}>← 返回战绩</AdminLink>
       <header className="admin-page-heading"><div><p className="admin-eyebrow">{match.id}</p><h1>{modeLabel(match.mode)}</h1><p>{dateTime(match.createdAt)} · 版本 {match.version}</p></div><span className={`admin-status ${match.status}`}>{statusLabel(match.status)}</span></header>
       <div className="admin-score-grid">{match.players.map((player) => <article key={player.id}><small>{player.role} · 座位 {player.seatNo + 1}</small><b>{player.nickname ?? player.nicknameSnapshot}</b><strong>{player.finalScore ?? 0}</strong><span>{player.username ? `@${player.username}` : "游客"}</span></article>)}</div>
       <div className="admin-detail-grid">
@@ -368,7 +378,7 @@ export default function AdminApp({ path, navigate }: { path: string; navigate: (
     if (admin && (path === "/admin" || path === "/admin/login")) navigate("/admin/users");
   }, [admin, checking, navigate, path]);
   if (checking) return <main className="admin-login-shell"><p className="admin-loading" role="status">正在验证管理员会话…</p></main>;
-  if (!admin) return <LoginPage onAuthenticated={(next) => { setAdmin(next); navigate("/admin/users"); }} />;
+  if (!admin) return <LoginPage navigate={navigate} onAuthenticated={(next) => { setAdmin(next); navigate("/admin/users"); }} />;
 
   const logout = async () => {
     try { await payload(await fetch("/api/admin/auth/logout", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })); } finally { setAdmin(null); navigate("/admin/login"); }
@@ -378,8 +388,8 @@ export default function AdminApp({ path, navigate }: { path: string; navigate: (
   return (
     <main className="admin-root">
       <a className="admin-skip" href="#admin-content">跳到主要内容</a>
-      <aside className="admin-sidebar"><button className="admin-brand" onClick={() => navigate("/admin/users")}><span>8</span><div><b>台球奇招</b><small>管理后台</small></div></button><nav aria-label="管理后台导航"><button className={path.startsWith("/admin/users") ? "active" : ""} onClick={() => navigate("/admin/users")}>用户</button><button className={path.startsWith("/admin/matches") ? "active" : ""} onClick={() => navigate("/admin/matches")}>战绩</button></nav><div className="admin-account"><span>{admin.username.slice(0, 1).toUpperCase()}</span><div><b>{admin.username}</b><small>管理员</small></div><button onClick={() => void logout()}>退出</button></div></aside>
-      <div className="admin-mobile-bar"><button className="admin-mobile-brand" onClick={() => navigate("/admin/users")}>8 · 管理后台</button><nav><button onClick={() => navigate("/admin/users")}>用户</button><button onClick={() => navigate("/admin/matches")}>战绩</button><button onClick={() => void logout()}>退出</button></nav></div>
+      <aside className="admin-sidebar"><AdminLink className="admin-brand" href="/admin/users" navigate={navigate}><span>8</span><div><b>台球奇招</b><small>管理后台</small></div></AdminLink><nav aria-label="管理后台导航"><AdminLink className={path.startsWith("/admin/users") ? "active" : ""} href="/admin/users" navigate={navigate} aria-current={path.startsWith("/admin/users") ? "page" : undefined}>用户</AdminLink><AdminLink className={path.startsWith("/admin/matches") ? "active" : ""} href="/admin/matches" navigate={navigate} aria-current={path.startsWith("/admin/matches") ? "page" : undefined}>战绩</AdminLink></nav><div className="admin-account"><span>{admin.username.slice(0, 1).toUpperCase()}</span><div><b>{admin.username}</b><small>管理员</small></div><button onClick={() => void logout()}>退出</button></div></aside>
+      <div className="admin-mobile-bar"><AdminLink className="admin-mobile-brand" href="/admin/users" navigate={navigate}>8 · 管理后台</AdminLink><nav aria-label="移动端管理导航"><AdminLink href="/admin/users" navigate={navigate}>用户</AdminLink><AdminLink href="/admin/matches" navigate={navigate}>战绩</AdminLink><button onClick={() => void logout()}>退出</button></nav></div>
       <div id="admin-content" className="admin-content">{userId ? <UserDetailPage userId={userId} navigate={navigate} /> : matchId ? <MatchDetailPage matchId={matchId} navigate={navigate} /> : path === "/admin/matches" ? <MatchesPage navigate={navigate} /> : <UsersPage navigate={navigate} />}</div>
     </main>
   );

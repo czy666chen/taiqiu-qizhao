@@ -155,7 +155,7 @@ export default function RealtimePreviewTest() {
       <div className={styles.stepHeader}><span>02</span><div><b>选择未结束对局</b><small>第一次请求创建房间，第二次请求必须复用同一码</small></div></div>
       {user && !matches.length && !loading ? <div className={`${styles.notice} ${styles.warning}`}><b>没有可用云端对局</b><span>请先在应用中创建并同步一场未结束对局。</span><Link href="/play">创建对局</Link></div> : <label className={styles.selectLabel}>
         <span>云端对局</span>
-        <select disabled={!user || loading || running} value={selectedMatchId} onChange={(event) => { setSelectedMatchId(event.target.value); setResults([]); setMessage(""); }}>
+        <select name="preview-match" autoComplete="off" disabled={!user || loading || running} value={selectedMatchId} onChange={(event) => { setSelectedMatchId(event.target.value); setResults([]); setMessage(""); }}>
           <option value="">请选择</option>
           {matches.map((match) => <option key={match.id} value={match.id}>{MODE_LABELS[match.mode] ?? match.mode} · {formatTime(match.created_at)} · {match.status}</option>)}
         </select>

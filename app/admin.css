@@ -4,7 +4,7 @@
 .admin-root button:focus-visible, .admin-root input:focus-visible, .admin-root select:focus-visible, .admin-root a:focus-visible, .admin-login-shell button:focus-visible, .admin-login-shell input:focus-visible, .admin-login-shell a:focus-visible { outline: 2px solid var(--admin-mint, #79f5bd); outline-offset: 3px; }
 .admin-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .admin-skip { position: fixed; z-index: 100; top: -60px; left: 16px; padding: 10px 14px; color: #ffffff; background: var(--admin-mint); border-radius: 6px; }
-.admin-skip:focus { top: 16px; }
+.admin-skip:focus-visible { top: 16px; }
 .admin-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 10; display: flex; width: 228px; padding: 28px 22px; flex-direction: column; border-right: 1px solid var(--admin-line); background: rgba(255, 255, 255, .94); backdrop-filter: blur(18px); }
 .admin-brand { display: flex; gap: 12px; align-items: center; padding: 0; border: 0; color: var(--admin-text); background: transparent; text-align: left; }
 .admin-brand > span { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 50%; color: #ffffff; background: var(--admin-mint); font: 900 22px Georgia, serif; box-shadow: 0 8px 24px rgba(21, 78, 45, .14); }
@@ -126,3 +126,16 @@
 @media (prefers-reduced-motion: reduce) {
   .admin-root *, .admin-login-shell * { scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
+
+.admin-root a, .admin-login-shell a { color: inherit; text-decoration: none; touch-action: manipulation; -webkit-tap-highlight-color: rgba(22, 131, 74, .16); }
+.admin-sidebar nav a { min-height: 44px; padding: 0 14px; display: flex; align-items: center; border: 1px solid transparent; border-radius: 8px; color: var(--admin-muted); background: transparent; text-align: left; }
+.admin-sidebar nav a:hover, .admin-sidebar nav a.active { border-color: #a9cdb5; color: var(--admin-mint); background: #edf8f1; }
+.admin-brand { display: flex; align-items: center; }
+.admin-link, .admin-quiet, .admin-back { display: inline-flex; align-items: center; }
+.admin-record { display: flex; align-items: center; justify-content: space-between; }
+.admin-match-list > a { display: grid; gap: 10px; min-width: 0; padding: 20px; border: 1px solid var(--admin-line); border-radius: 12px; color: var(--admin-text); background: linear-gradient(145deg, #ffffff, #f1faf4); text-align: left; transition: border-color .15s ease, transform .15s ease; }
+.admin-match-list > a:hover { border-color: #a9cdb5; transform: translateY(-1px); }
+.admin-match-list > a > div { display: flex; gap: 6px; }
+.admin-mobile-bar a { display: inline-flex; min-height: 44px; padding: 0 9px; align-items: center; color: var(--admin-muted); font-size: 11px; }
+.admin-mobile-brand { color: var(--admin-mint) !important; font-weight: 900; }
+.admin-root button:hover:not(:disabled), .admin-login-shell button:hover:not(:disabled), .admin-root a:hover, .admin-login-shell a:hover { filter: brightness(.96); }

@@ -42,7 +42,7 @@ test("牌组页默认数量、精简卡牌表单与官方牌库弹窗", async ({
   await page.route("**/api/card-catalog", (route) => route.fulfill({ json: { customCards: [] } }));
   await page.route("**/api/decks", (route) => route.fulfill({ json: { decks: [] } }));
   await page.goto("/");
-  await page.getByRole("button", { name: "牌组" }).click();
+  await page.getByRole("link", { name: "牌组" }).click();
 
   const quantityInputs = page.locator(".deck-card-picker input");
   await expect(quantityInputs.first()).toHaveValue("1");
@@ -144,7 +144,7 @@ test("R2.5 中八建局、逐局录入、布局切换、恢复与战绩导出", 
 
 test("奇招牌抽取、使用、安全跳过和刷新恢复", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "玩法" }).click();
+  await page.getByRole("link", { name: "玩法" }).click();
   await page.getByRole("button", { name: "查看并开始" }).click();
   await page.getByRole("button", { name: /全量牌库/ }).click();
   await page.getByRole("button", { name: /下一步：确认规则/ }).click();
@@ -162,12 +162,12 @@ test("奇招牌抽取、使用、安全跳过和刷新恢复", async ({ page }) 
 
 test("未结束对局可保存后新建并恢复", async ({ page }) => {
   await createScoreMatch(page, 2);
-  await page.getByRole("button", { name: "玩法" }).click();
+  await page.getByRole("link", { name: "玩法" }).click();
   await page.getByRole("button", { name: /开始设置/ }).click();
   await expect(page.getByRole("heading", { name: "发现未结束对局" })).toBeVisible();
   await page.getByRole("button", { name: "保存当前对局后新建" }).click();
   await page.getByRole("button", { name: "关闭" }).click();
-  await page.getByRole("button", { name: "返回对局首页" }).click();
+  await page.getByRole("link", { name: "返回对局首页" }).click();
   await expect(page.getByRole("heading", { name: "继续未结束对局" })).toBeVisible();
   await page.getByRole("button", { name: /继续 →/ }).click();
   await expect(page.locator(".live-label")).toHaveText(/对局进行中/);
@@ -211,7 +211,7 @@ test("R2 转账计分由每名输家支付固定分数", async ({ page }) => {
 
 test("R2 高级抽牌与牌分联动可撤销并进入统一历史", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "玩法" }).click();
+  await page.getByRole("link", { name: "玩法" }).click();
   await page.getByRole("button", { name: "同时加入奇招牌" }).click();
   await page.getByLabel("自动补牌策略").selectOption("after_play");
   await page.getByLabel("卡牌最高安全等级").selectOption("low");

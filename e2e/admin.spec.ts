@@ -71,7 +71,7 @@ test("管理员可登录并进入用户列表", async ({ page }, testInfo) => {
   await page.getByLabel("用户名或昵称").fill("player");
   await page.getByRole("button", { name: "查询" }).click();
   await expect(page.getByText("测试玩家")).toBeVisible();
-  await page.getByRole("button", { name: "查看详情" }).click();
+  await page.getByRole("link", { name: "查看详情" }).click();
   await expect(page.getByRole("heading", { name: "测试玩家" })).toBeVisible();
   await page.getByRole("button", { name: "重置用户密码" }).click();
   await page.getByLabel("当前管理员密码").fill("not-a-real-secret");
@@ -81,7 +81,7 @@ test("管理员可登录并进入用户列表", async ({ page }, testInfo) => {
   await page.getByLabel("我已安全保存新密码").check();
   await page.getByRole("button", { name: "关闭" }).click();
 
-  await page.getByRole("button", { name: "战绩", exact: true }).click();
+  await page.getByRole("link", { name: "战绩", exact: true }).click();
   await expect(page.getByRole("heading", { name: "战绩管理" })).toBeVisible();
   await expect(page.getByText("match-1")).toBeVisible();
 });
