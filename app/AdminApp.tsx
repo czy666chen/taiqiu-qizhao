@@ -242,7 +242,7 @@ function ResetPasswordDialog({ user, onClose, onReset }: { user: UserDetail; onC
       }}>
         <h2 id="reset-title">重置 {user.username} 的密码</h2>
         {!newPassword ? <form onSubmit={(event) => void submit(event)}>
-          <p className="admin-warning">这会立即注销该用户的所有旧会话。新密码只显示一次。</p>
+          <p className="admin-warning">这会立即注销该用户的所有旧会话，并将密码重置为 123456。</p>
           <label htmlFor="reset-admin-password">当前管理员密码</label>
           <input id="reset-admin-password" name="admin-password" type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required />
           <label htmlFor="reset-confirmation">输入目标用户名确认</label>
@@ -252,16 +252,44 @@ function ResetPasswordDialog({ user, onClose, onReset }: { user: UserDetail; onC
         </form> : <div className="admin-password-result">
           <p>新密码</p><code>{newPassword}</code>
           <button className="admin-quiet" onClick={() => void navigator.clipboard.writeText(newPassword)}>复制密码</button>
-          <label className="admin-checkbox"><input type="checkbox" checked={saved} onChange={(event) => setSaved(event.target.checked)} />我已安全保存新密码</label>
+          <label className="admin-checkbox"><input type="checkbox" checked={saved} onChange={(event) => setSaved(event.target.checked)} />我已告知用户登录后立即更改密码</label>
           <button className="admin-primary" disabled={!saved} onClick={onClose}>关闭</button>
         </div>}
       </dialog>
   );
 }
 
+function DeleteUserDialog({ user, onClose, onDeleted }: { user: UserDetail; onClose: () => void; onDeleted: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    return () => dialog?.close();
+  }, []);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true); setError("");
+    try {
+      await payload(await fetch(`/api/admin/users/${user.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword, confirmation }),
+      }));
+      onDeleted();
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "账户删除失败"); }
+    finally { setBusy(false); }
+  };
+  return <dialog ref={dialogRef} className="admin-dialog" aria-labelledby="delete-user-title" onCancel={onClose}><h2 id="delete-user-title">删除 {user.username} 的账户</h2><form onSubmit={(event) => void submit(event)}><p className="admin-warning">该操作不可恢复。用户专属数据会被删除；已有其他注册参与者的共享对局会保留，并解除该用户关联。</p><label htmlFor="delete-admin-password">当前管理员密码</label><input id="delete-admin-password" name="admin-password" type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /><label htmlFor="delete-user-confirmation">输入目标用户名确认</label><input id="delete-user-confirmation" name="target-username" autoComplete="off" spellCheck={false} value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder={`例如：${user.username}`} required /><ErrorNotice message={error} /><div className="admin-dialog-actions"><button type="button" className="admin-quiet" disabled={busy} onClick={onClose}>取消</button><button className="admin-danger" disabled={busy || confirmation !== user.username}>{busy ? "正在删除…" : "永久删除账户"}</button></div></form></dialog>;
+}
+
 function UserDetailPage({ userId, navigate }: { userId: string; navigate: (path: string) => void }) {
   const [data, setData] = useState<{ user: UserDetail; recentMatches: UserMatch[]; recentAuthEvents: AuthEvent[] } | null>(null);
   const [resetOpen, setResetOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const [error, setError] = useState("");
   const load = async () => {
     try { setData(await payload(await fetch(`/api/admin/users/${userId}`))); }
@@ -279,12 +307,13 @@ function UserDetailPage({ userId, navigate }: { userId: string; navigate: (path:
       <AdminLink className="admin-back" href="/admin/users" navigate={navigate}>← 返回用户</AdminLink>
       <header className="admin-detail-heading"><div className="admin-avatar">{user.nickname.slice(0, 1)}</div><div><p className="admin-eyebrow">{user.publicCode}</p><h1>{user.nickname}</h1><p>@{user.username}</p></div><span className={`admin-status ${user.status}`}>{statusLabel(user.status)}</span></header>
       <div className="admin-metrics"><article><small>战绩</small><strong>{user.matchCount}</strong></article><article><small>有效会话</small><strong>{user.activeSessionCount}</strong></article><article><small>注册时间</small><strong>{dateTime(user.createdAt)}</strong></article><article><small>最近重置密码</small><strong>{dateTime(user.passwordResetAt)}</strong></article></div>
-      {user.status === "active" && <button className="admin-danger" onClick={() => setResetOpen(true)}>重置用户密码</button>}
+      <div className="admin-detail-actions">{user.status === "active" && <button className="admin-danger" onClick={() => setResetOpen(true)}>重置用户密码</button>}<button className="admin-danger" onClick={() => setDeleteOpen(true)}>删除账户</button></div>
       <div className="admin-detail-grid">
         <section className="admin-panel"><h2>最近战绩</h2>{data.recentMatches.length ? data.recentMatches.map((match) => <AdminLink className="admin-record" key={match.id} href={`/admin/matches/${match.id}`} navigate={navigate}><span><b>{modeLabel(match.mode)}</b><small>{dateTime(match.createdAt)} · {match.isOwner ? "房主" : "参与者"}</small></span><span className={`admin-status ${match.status}`}>{statusLabel(match.status)}</span></AdminLink>) : <p className="admin-muted">暂无战绩</p>}</section>
         <section className="admin-panel"><h2>最近认证事件</h2>{data.recentAuthEvents.length ? data.recentAuthEvents.map((event) => <article className="admin-record" key={event.id}><span><b>{event.action}</b><small>{dateTime(event.createdAt)}</small></span><span className={`admin-status ${event.outcome}`}>{event.outcome}</span></article>) : <p className="admin-muted">暂无认证事件</p>}</section>
       </div>
       {resetOpen && <ResetPasswordDialog user={user} onClose={() => setResetOpen(false)} onReset={() => void load()} />}
+      {deleteOpen && <DeleteUserDialog user={user} onClose={() => setDeleteOpen(false)} onDeleted={() => navigate("/admin/users")} />}
     </section>
   );
 }

@@ -19,8 +19,9 @@ test("管理员可登录并进入用户列表", async ({ page }, testInfo) => {
       nextCursor: null,
     },
   }));
-  await page.route("**/api/admin/users/user-1", (route) => route.fulfill({
-    json: {
+  await page.route("**/api/admin/users/user-1", (route) => route.request().method() === "DELETE" ? route.fulfill({
+    json: { deleted: true },
+  }) : route.fulfill({ json: {
       user: {
         id: "user-1", username: "player", publicCode: "PLAYER01", nickname: "测试玩家",
         status: "active", createdAt: 1_700_000_000_000, updatedAt: 1_700_000_000_000,
@@ -33,7 +34,7 @@ test("管理员可登录并进入用户列表", async ({ page }, testInfo) => {
   }));
   await page.route("**/api/admin/users/user-1/reset-password", async (route) => {
     expect(route.request().postDataJSON()).toEqual({ currentPassword: "not-a-real-secret" });
-    await route.fulfill({ json: { newPassword: "NEW-PASSWORD-1234" } });
+    await route.fulfill({ json: { newPassword: "123456" } });
   });
   await page.route("**/api/admin/matches?**", (route) => route.fulfill({
     json: {
@@ -77,9 +78,15 @@ test("管理员可登录并进入用户列表", async ({ page }, testInfo) => {
   await page.getByLabel("当前管理员密码").fill("not-a-real-secret");
   await page.getByLabel("输入目标用户名确认").fill("player");
   await page.getByRole("button", { name: "确认重置" }).click();
-  await expect(page.getByText("NEW-PASSWORD-1234")).toBeVisible();
-  await page.getByLabel("我已安全保存新密码").check();
+  await expect(page.getByText("123456")).toBeVisible();
+  await page.getByLabel("我已告知用户登录后立即更改密码").check();
   await page.getByRole("button", { name: "关闭" }).click();
+
+  await page.getByRole("button", { name: "删除账户" }).click();
+  await page.getByLabel("当前管理员密码").fill("not-a-real-secret");
+  await page.getByLabel("输入目标用户名确认").fill("player");
+  await page.getByRole("button", { name: "永久删除账户" }).click();
+  await expect(page).toHaveURL(/\/admin\/users$/);
 
   await page.getByRole("link", { name: "战绩", exact: true }).click();
   await expect(page.getByRole("heading", { name: "战绩管理" })).toBeVisible();

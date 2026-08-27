@@ -87,6 +87,7 @@
 .admin-dialog h2 { margin: 0 0 18px; font: 800 24px Georgia, "Microsoft YaHei", serif; }
 .admin-dialog form { display: grid; gap: 13px; }
 .admin-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.admin-detail-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .admin-password-result { display: grid; gap: 14px; }
 .admin-password-result code { padding: 18px; border: 1px dashed #c38a17; border-radius: 8px; color: #704a00; background: #fff9e9; font-size: 19px; text-align: center; letter-spacing: .08em; }
 .admin-checkbox { display: flex !important; min-height: 44px; align-items: center; grid-template-columns: auto 1fr; }

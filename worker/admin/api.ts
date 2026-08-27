@@ -15,6 +15,7 @@ const LOGIN_FAILURE_LIMIT = 10;
 const LOGIN_FAILURE_WINDOW_MS = 15 * 60 * 1000;
 const DEFAULT_PAGE_SIZE = 30;
 const MAX_PAGE_SIZE = 100;
+const DEFAULT_RESET_PASSWORD = "123456";
 
 export type AdminEnv = Env & {
   PASSWORD_HMAC_KEY: string;
@@ -371,13 +372,6 @@ type AdminMatchAuditRow = {
   metadata_json: string;
   created_at: number;
 };
-
-function generatedPassword(): string {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (byte) => alphabet[byte & 31]).join("");
-}
 
 function listUsersParameters(request: Request): {
   query: string;
@@ -831,7 +825,7 @@ async function resetUserPassword(
     return json({ error: user ? "该用户当前不可重置密码" : "用户不存在" }, user ? 409 : 404);
   }
 
-  const password = generatedPassword();
+  const password = DEFAULT_RESET_PASSWORD;
   const passwordDigest = await digestPassword(env.PASSWORD_HMAC_KEY, user.normalized_username, password);
   const now = Date.now();
   await env.DB.batch([
@@ -855,6 +849,66 @@ async function resetUserPassword(
   return json({ newPassword: password });
 }
 
+async function deleteUserAccount(
+  request: Request,
+  env: AdminEnv,
+  requestId: string,
+  userId: string,
+): Promise<Response> {
+  requireSameOrigin(request);
+  const current = await requireAdminSession(env, request);
+  const body = await readJson(request);
+  const currentPassword = validatePassword(body.currentPassword);
+  const currentDigest = await digestPassword(
+    env.PASSWORD_HMAC_KEY,
+    current.admin.normalized_username,
+    currentPassword,
+  );
+  if (!(await verifySecret(currentDigest, current.admin.password_digest))) {
+    await env.DB.prepare(
+      `INSERT INTO admin_audit_events
+         (id, admin_user_id, action, target_type, target_id, outcome, request_id, metadata_json)
+       VALUES (?1, ?2, 'delete_user_account', 'user', ?3, 'failure', ?4, '{"reason":"admin_password"}')`,
+    ).bind(crypto.randomUUID(), current.admin.id, userId, requestId).run();
+    return json({ error: "当前管理员密码错误" }, 401);
+  }
+
+  const user = await env.DB.prepare(
+    "SELECT display_username FROM users WHERE id = ?1",
+  ).bind(userId).first<{ display_username: string }>();
+  if (!user) return json({ error: "用户不存在" }, 404);
+  if (body.confirmation !== user.display_username) {
+    return json({ error: "目标用户名确认不匹配" }, 400);
+  }
+
+  const now = Date.now();
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE matches
+          SET owner_user_id = (
+                SELECT mp.user_id FROM match_players mp
+                 WHERE mp.match_id = matches.id AND mp.user_id IS NOT NULL AND mp.user_id <> ?1
+                 ORDER BY mp.seat_no LIMIT 1
+              ),
+              write_lease_device_id = NULL, write_lease_expires_at = NULL, updated_at = ?2
+        WHERE owner_user_id = ?1 AND privacy = 'participants'
+          AND EXISTS (
+            SELECT 1 FROM match_players mp
+             WHERE mp.match_id = matches.id AND mp.user_id IS NOT NULL AND mp.user_id <> ?1
+          )`,
+    ).bind(userId, now),
+    env.DB.prepare("DELETE FROM matches WHERE owner_user_id = ?1").bind(userId),
+    env.DB.prepare("UPDATE match_players SET user_id = NULL WHERE user_id = ?1").bind(userId),
+    env.DB.prepare(
+      `INSERT INTO admin_audit_events
+         (id, admin_user_id, action, target_type, target_id, outcome, request_id, metadata_json, created_at)
+       VALUES (?1, ?2, 'delete_user_account', 'user', ?3, 'success', ?4, '{}', ?5)`,
+    ).bind(crypto.randomUUID(), current.admin.id, userId, requestId, now),
+    env.DB.prepare("DELETE FROM users WHERE id = ?1").bind(userId),
+  ]);
+  return json({ deleted: true });
+}
+
 export async function handleAdminApiRequest(request: Request, env: AdminEnv): Promise<Response> {
   const { pathname } = new URL(request.url);
   const requestId = request.headers.get("CF-Ray") ?? request.headers.get("X-Request-ID") ?? crypto.randomUUID();
@@ -874,6 +928,9 @@ export async function handleAdminApiRequest(request: Request, env: AdminEnv): Pr
     }
     const userMatch = pathname.match(/^\/api\/admin\/users\/([^/]+)$/);
     if (userMatch && request.method === "GET") return await userDetail(request, env, userMatch[1]);
+    if (userMatch && request.method === "DELETE") {
+      return await deleteUserAccount(request, env, requestId, userMatch[1]);
+    }
     if (pathname === "/api/admin/matches" && request.method === "GET") return await listMatches(request, env);
     const matchMatch = pathname.match(/^\/api\/admin\/matches\/([^/]+)$/);
     if (matchMatch && request.method === "GET") return await matchDetail(request, env, matchMatch[1]);

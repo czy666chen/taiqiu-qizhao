@@ -96,6 +96,26 @@ test("战绩 JSON 可校验并下载长图和 PDF", async ({ page }) => {
   expect(mutationRequests).toEqual([]);
 });
 
+test("登录用户可输入旧密码更改密码并看到忘记密码提示", async ({ page }) => {
+  await page.route("**/api/auth/me", (route) => route.fulfill({ json: { user: { id: "user-1", username: "tester", publicCode: "TEST0001", nickname: "测试玩家", avatarUrl: null } } }));
+  await page.route("**/api/history", (route) => route.fulfill({ json: { matches: [] } }));
+  await page.route("**/api/auth/change-password", async (route) => {
+    expect(route.request().postDataJSON()).toEqual({ currentPassword: "old-secret", newPassword: "new-secret" });
+    await route.fulfill({ json: { ok: true } });
+  });
+  await page.goto("/profile");
+
+  await expect(page.getByLabel("旧密码")).toHaveCount(0);
+  await page.getByRole("button", { name: "更改密码" }).click();
+  await expect(page.getByRole("dialog", { name: "更改密码" })).toBeVisible();
+  await expect(page.getByText(/忘记旧密码.*联系管理员/)).toBeVisible();
+  await page.getByLabel("旧密码").fill("old-secret");
+  await page.getByLabel("新密码", { exact: true }).fill("new-secret");
+  await page.getByLabel("确认新密码").fill("new-secret");
+  await page.getByRole("button", { name: "确认更改密码" }).click();
+  await expect(page.getByText("密码已更新，其他设备上的登录已失效")).toBeVisible();
+});
+
 test("直接刷新牌组深链后仍能完成客户端恢复", async ({ page }) => {
   await page.goto("/decks");
   await expect(page.getByRole("heading", { name: "牌组", exact: true })).toBeVisible();

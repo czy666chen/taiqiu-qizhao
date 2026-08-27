@@ -280,7 +280,7 @@ describe("administrator authentication HTTP API", () => {
     );
     expect(reset.status).toBe(200);
     const body = await reset.json<{ newPassword: string }>();
-    expect(body.newPassword).toMatch(/^[A-HJ-NP-Z2-9]{16}$/);
+    expect(body.newPassword).toBe("123456");
 
     const user = await env.DB.prepare(
       `SELECT normalized_username, password_digest, password_version, password_reset_at
@@ -326,6 +326,59 @@ describe("administrator authentication HTTP API", () => {
     expect((await SELF.fetch("http://example.com/api/history", {
       headers: { Cookie: userCookie },
     })).status).toBe(200);
+  });
+
+  it("deletes a user account after administrator password and username confirmation", async () => {
+    const userId = "10000000-0000-4000-8000-000000000001";
+    const otherUserId = "10000000-0000-4000-8000-000000000002";
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO users (id, normalized_username, display_username, password_digest)
+         VALUES (?1, 'alpha', 'Alpha', 'digest-alpha'),
+                (?2, 'beta', 'Beta', 'digest-beta')`,
+      ).bind(userId, otherUserId),
+      env.DB.prepare(
+        `INSERT INTO profiles (user_id, public_code, nickname)
+         VALUES (?1, 'PUBALPHA', '甲选手'), (?2, 'PUBBETAA', '乙选手')`,
+      ).bind(userId, otherUserId),
+      env.DB.prepare(
+        `INSERT INTO matches (id, owner_user_id, mode, privacy)
+         VALUES ('20000000-0000-4000-8000-000000000001', ?1, 'score', 'participants')`,
+      ).bind(userId),
+      env.DB.prepare(
+        `INSERT INTO match_players (id, match_id, seat_no, user_id, nickname_snapshot)
+         VALUES ('30000000-0000-4000-8000-000000000001',
+                 '20000000-0000-4000-8000-000000000001', 0, ?1, '甲选手'),
+                ('30000000-0000-4000-8000-000000000002',
+                 '20000000-0000-4000-8000-000000000001', 1, ?2, '乙选手')`,
+      ).bind(userId, otherUserId),
+    ]);
+    const login = await post("/api/admin/auth/login", { username: "admin", password: "secret1" });
+    const cookie = (login.headers.get("Set-Cookie") ?? "").split(";", 1)[0];
+
+    const wrong = await SELF.fetch(`http://example.com/api/admin/users/${userId}`, {
+      method: "DELETE",
+      headers: { Cookie: cookie, "Content-Type": "application/json", Origin: "http://example.com" },
+      body: JSON.stringify({ currentPassword: "wrong11", confirmation: "Alpha" }),
+    });
+    expect(wrong.status).toBe(401);
+
+    const deleted = await SELF.fetch(`http://example.com/api/admin/users/${userId}`, {
+      method: "DELETE",
+      headers: { Cookie: cookie, "Content-Type": "application/json", Origin: "http://example.com" },
+      body: JSON.stringify({ currentPassword: "secret1", confirmation: "Alpha" }),
+    });
+    expect(deleted.status).toBe(200);
+    await expect(deleted.json()).resolves.toEqual({ deleted: true });
+    await expect(env.DB.prepare("SELECT count(*) AS count FROM users WHERE id = ?1")
+      .bind(userId).first<number>("count")).resolves.toBe(0);
+    await expect(env.DB.prepare("SELECT owner_user_id FROM matches WHERE id = '20000000-0000-4000-8000-000000000001'")
+      .first<string>("owner_user_id")).resolves.toBe(otherUserId);
+    await expect(env.DB.prepare("SELECT user_id FROM match_players WHERE id = '30000000-0000-4000-8000-000000000001'")
+      .first<string | null>("user_id")).resolves.toBeNull();
+    await expect(env.DB.prepare(
+      "SELECT outcome FROM admin_audit_events WHERE action = 'delete_user_account' ORDER BY created_at DESC LIMIT 1",
+    ).first<string>("outcome")).resolves.toBe("success");
   });
 
   it("refuses password resets for missing, disabled, and deleted users", async () => {
