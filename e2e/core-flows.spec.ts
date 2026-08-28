@@ -11,6 +11,72 @@ async function createScoreMatch(page: Page, playerCount = 2) {
   await expect(page.locator(".live-label")).toHaveText(/对局进行中/);
 }
 
+async function seedLongTeamBattle(page: Page, roundCount = 320) {
+  const startedAt = 1_788_000_000_000;
+  const players = Array.from({ length: 8 }, (_, index) => ({
+    id: `team-player-${index + 1}`,
+    name: `成员 ${index + 1}`,
+    joinedAt: startedAt + index,
+  }));
+  const playerNames = Object.fromEntries(players.map(({ id, name }) => [id, name]));
+  const events = Array.from({ length: roundCount }, (_, index) => ({
+    id: `team-round-${index + 1}`,
+    sequenceNo: index + 1,
+    type: "round",
+    occurredAt: startedAt + index + 1,
+    playerNames,
+    round: {
+      playerIds: [players[0].id, players[1].id],
+      winnerId: players[index % 2].id,
+      winType: "normal",
+      fouls: { [players[0].id]: 0, [players[1].id]: 0 },
+      note: "",
+      startedAt: startedAt + index,
+      confirmedAt: startedAt + index + 1,
+    },
+  }));
+  const id = "team-battle-long-e2e";
+  const match = {
+    schemaVersion: 1,
+    id,
+    mode: "team_battle",
+    status: "completed",
+    title: "超长团战",
+    location: "",
+    note: "",
+    createdAt: startedAt,
+    startedAt,
+    endedAt: startedAt + roundCount + 2,
+    pausedDurationMs: 0,
+    players,
+    events: [...events, {
+      id: "team-finish",
+      sequenceNo: roundCount + 1,
+      type: "finish",
+      occurredAt: startedAt + roundCount + 2,
+      playerNames,
+    }],
+  };
+  await page.addInitScript(({ storageValue }) => {
+    localStorage.setItem("billiards-club-assistant:v1", JSON.stringify(storageValue));
+  }, { storageValue: {
+    version: 3,
+    activeMatch: null,
+    history: [],
+    savedRules: [],
+    scorePresets: [],
+    pausedMatches: [],
+    recoverySnapshots: [],
+    activeEightBallMatch: null,
+    eightBallHistory: [],
+    activeSnookerMatch: null,
+    snookerHistory: [],
+    activeTeamBattleMatch: null,
+    teamBattleHistory: [match],
+  } });
+  return id;
+}
+
 test("斯诺克本机计分可形成 31+ 单杆、判罚并刷新恢复", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /标准斯诺克/ }).click();
@@ -39,15 +105,25 @@ test("斯诺克本机计分可形成 31+ 单杆、判罚并刷新恢复", async 
   await expect(page.locator(".snooker-frame-scoreboard article").nth(1).locator("strong")).toHaveText("4");
   await page.getByRole("button", { name: "撤销上一事件" }).click();
   await expect(page.locator(".snooker-frame-scoreboard article").nth(1).locator("strong")).toHaveText("0");
+  await page.getByRole("button", { name: "结束比赛" }).click();
+  await page.getByRole("button", { name: "确认结束并保存" }).click();
+  const imageDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "保存竖版长图" }).click();
+  await expect((await imageDownload).suggestedFilename()).toMatch(/^斯诺克战绩-.*\.png$/);
 });
 
-test("玩法四卡布局与标准斯诺克设置在视口内稳定显示", async ({ page }) => {
+test("玩法五卡布局与标准斯诺克设置在视口内稳定显示", async ({ page }) => {
   await page.goto("/");
   await page.goto("/play");
   const modeCards = page.locator(".mode-card");
-  await expect(modeCards).toHaveCount(4);
+  await expect(modeCards).toHaveCount(5);
+  await expect(modeCards.locator("h2")).toHaveText(["中八双人赛", "追分", "团队记分", "斯诺克", "奇招卡牌局"]);
   const cardWidths = await modeCards.evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().width));
   expect(cardWidths.every((width) => width >= 280)).toBe(true);
+  if ((await page.viewportSize())!.width > 900) {
+    const cardHeights = await modeCards.evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().height));
+    expect(Math.max(...cardHeights)).toBeLessThanOrEqual(320);
+  }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
 
   await page.getByRole("button", { name: /开始标准斯诺克/ }).click();
@@ -56,6 +132,131 @@ test("玩法四卡布局与标准斯诺克设置在视口内稳定显示", async
   const bodyBottom = await page.locator(".snooker-setup .setup-body").evaluate((element) => element.getBoundingClientRect().bottom);
   const footerTop = await page.locator(".snooker-setup .modal-actions").evaluate((element) => element.getBoundingClientRect().top);
   expect(bodyBottom).toBeLessThanOrEqual(footerTop + 1);
+});
+
+test("团战多组合比分隔离并在刷新后恢复", async ({ page }) => {
+  await page.goto("/play");
+  await page.getByRole("button", { name: "开始团战设置" }).click();
+  await page.getByRole("button", { name: "开始本机团战" }).click();
+  await expect(page.locator(".live-label")).toHaveText(/本机团战进行中/);
+
+  await page.getByRole("button", { name: "成员 1 获胜" }).click();
+  await page.getByRole("button", { name: "确认本局并进入下一局" }).click();
+  await expect(page.locator(".head-to-head-scoreboard strong")).toHaveText(["1", "0"]);
+
+  await page.getByRole("button", { name: "成员管理" }).click();
+  for (let member = 3; member <= 8; member += 1) {
+    await page.getByLabel("加入新成员").fill(`成员 ${member}`);
+    await page.getByRole("button", { name: "加入成员", exact: true }).click();
+  }
+  await expect(page.getByText("已达到 8 人上限。")).toBeVisible();
+  await expect(page.getByRole("button", { name: "加入成员", exact: true })).toBeDisabled();
+  await page.getByLabel("蓝方成员").selectOption({ label: "成员 3" });
+  await expect(page.locator(".head-to-head-scoreboard strong")).toHaveText(["0", "0"]);
+  await expect(page.getByLabel("蓝方成员").locator("option").filter({ hasText: "成员 1" })).toHaveAttribute("disabled", "");
+
+  await page.getByLabel("本局备注").fill("不能带到新组合");
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await page.getByLabel("蓝方成员").selectOption({ label: "成员 4" });
+  await expect(page.getByLabel("蓝方成员")).toHaveValue(await page.getByLabel("蓝方成员").locator("option").filter({ hasText: "成员 3" }).getAttribute("value") ?? "");
+  await expect(page.getByLabel("本局备注")).toHaveValue("不能带到新组合");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByLabel("蓝方成员").selectOption({ label: "成员 4" });
+  await expect(page.getByLabel("本局备注")).toHaveValue("");
+  await page.getByLabel("蓝方成员").selectOption({ label: "成员 3" });
+  await page.getByRole("button", { name: "成员 3 获胜" }).click();
+  await page.getByRole("button", { name: "确认本局并进入下一局" }).click();
+  await expect(page.locator(".head-to-head-scoreboard strong")).toHaveText(["0", "1"]);
+
+  await page.getByRole("button", { name: "暂停计时" }).click();
+  await expect(page.getByRole("button", { name: "确认本局并进入下一局" })).toBeDisabled();
+  await page.getByRole("button", { name: "继续计时" }).click();
+  await page.reload();
+  await expect(page.locator(".head-to-head-scoreboard strong")).toHaveText(["1", "0"]);
+  await page.getByLabel("蓝方成员").selectOption({ label: "成员 3" });
+  await expect(page.locator(".head-to-head-scoreboard strong")).toHaveText(["0", "1"]);
+
+  await page.locator(".team-pair-ledger").getByRole("button", { name: "更正" }).click();
+  await page.getByRole("button", { name: "成员 1 获胜" }).click();
+  await page.getByRole("button", { name: "保存更正" }).click();
+  await expect(page.locator(".head-to-head-scoreboard strong")).toHaveText(["1", "0"]);
+  await page.getByRole("button", { name: /撤销当前组合上一局/ }).click();
+  await expect(page.locator(".head-to-head-scoreboard strong")).toHaveText(["0", "0"]);
+  for (const viewport of [{ width: 320, height: 568 }, { width: 667, height: 375 }]) {
+    await page.setViewportSize(viewport);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+  }
+  await page.getByRole("button", { name: "结束团战" }).click();
+  await page.getByRole("button", { name: "确认结束并保存" }).click();
+  await expect(page.getByRole("heading", { name: "团战结算" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "总排行" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "两两比分" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "逐局流水" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "下载 PNG 长图" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "下载 PDF" })).toBeVisible();
+  expect((await page.getByRole("button", { name: "返回战绩" }).boundingBox())?.width ?? 999).toBeLessThan(160);
+  const reportControlHeights = await page.locator(".team-report-actions select, .team-report-actions > .export-actions:not(.minor) button").evaluateAll((controls) => controls.map((control) => control.getBoundingClientRect().height));
+  expect(reportControlHeights.every((height) => height === 44)).toBe(true);
+  await page.getByRole("button", { name: "切换到白天版本" }).click();
+  await expect(page.locator(".team-report-preview")).toHaveCSS("color", "rgb(11, 104, 56)");
+  await expect(page.locator(".team-report-preview")).toHaveCSS("background-color", "rgb(238, 248, 242)");
+  const pngDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载 PNG 长图" }).click();
+  await expect((await pngDownload).suggestedFilename()).toMatch(/团战战绩-\d{8}\.png$/);
+  const pdfDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载 PDF" }).click();
+  await expect((await pdfDownload).suggestedFilename()).toMatch(/团战战绩-\d{8}\.pdf$/);
+  await page.getByLabel("报告范围").selectOption({ label: "成员 1" });
+  await expect(page.getByText(/成员 1 专项/)).toBeVisible();
+  const memberPdfDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载 PDF" }).click();
+  await expect((await memberPdfDownload).suggestedFilename()).toMatch(/团战战绩-成员 1-\d{8}\.pdf$/);
+  await page.getByRole("button", { name: "删除战绩" }).click();
+  await page.getByRole("button", { name: "确认删除" }).click();
+  await expect(page.getByRole("heading", { name: "还没有战绩" })).toBeVisible();
+});
+
+test("手机竖屏首页隐藏计分台预览且导航状态徽标不重叠", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await expect(page.locator(".match-table-preview")).toBeHidden();
+  const portraitHeroHeights = await page.locator(".welcome-panel").evaluate((panel) => ({
+    panel: panel.getBoundingClientRect().height,
+    copy: panel.querySelector(".welcome-copy")?.getBoundingClientRect().height ?? 0,
+  }));
+  expect(portraitHeroHeights.panel - portraitHeroHeights.copy).toBeLessThanOrEqual(32);
+
+  await page.setViewportSize({ width: 844, height: 390 });
+  await expect(page.locator(".match-table-preview")).toBeVisible();
+
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/play");
+  await page.getByRole("button", { name: "开始团战设置" }).click();
+  await page.getByRole("button", { name: "开始本机团战" }).click();
+  await expect(page.locator('.desktop-nav a[href="/"] i')).toHaveCSS("position", "static");
+});
+
+test("超长团战报告自动降级后仍可导出整场和八人成员报告", async ({ page }) => {
+  const matchId = await seedLongTeamBattle(page);
+  await page.goto(`/history/${matchId}`);
+
+  await expect(page.getByRole("heading", { name: "超长团战" })).toBeVisible();
+  await expect(page.locator(".team-pair-results article strong")).toHaveText("160 : 160");
+  await expect(page.getByText("内容较长，已省略逐局变化，仅展示两两最终比分")).toBeVisible();
+
+  const pngDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载 PNG 长图" }).click();
+  await expect((await pngDownload).suggestedFilename()).toMatch(/团战战绩-\d{8}\.png$/);
+  const pdfDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载 PDF" }).click();
+  await expect((await pdfDownload).suggestedFilename()).toMatch(/团战战绩-\d{8}\.pdf$/);
+
+  await page.getByLabel("报告范围").selectOption({ label: "成员 1" });
+  await expect(page.getByText("报告预览：成员 1 专项")).toBeVisible();
+  await expect(page.getByText("内容较长，已省略逐局变化，仅展示两两最终比分")).toBeVisible();
+  const memberPdfDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载 PDF" }).click();
+  await expect((await memberPdfDownload).suggestedFilename()).toMatch(/团战战绩-成员 1-\d{8}\.pdf$/);
 });
 
 test.describe("追分核心流程", () => {
@@ -78,9 +279,12 @@ test.describe("追分核心流程", () => {
     await expect(page.getByRole("heading", { name: "追分结算" })).toBeVisible();
     await page.reload();
     await expect(page.getByRole("heading", { name: "追分结算" })).toBeVisible();
-    const popupPromise = page.waitForEvent("popup");
-    await page.getByRole("button", { name: "打印 / PDF" }).click();
-    await expect((await popupPromise).getByRole("heading", { name: "追分战绩" })).toBeVisible();
+    const imageDownload = page.waitForEvent("download");
+    await page.getByRole("button", { name: "保存竖版长图" }).click();
+    await expect((await imageDownload).suggestedFilename()).toMatch(/^追分战绩-.*\.png$/);
+    const pdfDownload = page.waitForEvent("download");
+    await page.getByRole("button", { name: "下载 PDF" }).click();
+    await expect((await pdfDownload).suggestedFilename()).toMatch(/^追分战绩-.*\.pdf$/);
   });
 });
 
@@ -202,11 +406,14 @@ test("R2.5 中八建局、逐局录入、布局切换、恢复与战绩导出", 
   await expect(page.getByRole("checkbox", { name: "比分走势" })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: "分类统计" })).toBeChecked();
   await expect(page.getByRole("button", { name: "保存竖版长图" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "打印 / PDF" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "下载 PDF" })).toBeVisible();
   await expect(page.getByRole("button", { name: "JSON 备份" })).toBeVisible();
-  const popupPromise = page.waitForEvent("popup");
-  await page.getByRole("button", { name: "打印 / PDF" }).click();
-  await expect((await popupPromise).getByRole("heading", { name: "中八双人赛" })).toBeVisible();
+  const imageDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "保存竖版长图" }).click();
+  await expect((await imageDownload).suggestedFilename()).toMatch(/^中八战绩-.*\.png$/);
+  const pdfDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载 PDF" }).click();
+  await expect((await pdfDownload).suggestedFilename()).toMatch(/^中八战绩-.*\.pdf$/);
 });
 
 test("奇招牌抽取、使用、安全跳过和刷新恢复", async ({ page }) => {

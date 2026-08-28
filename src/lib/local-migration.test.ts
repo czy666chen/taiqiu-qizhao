@@ -10,6 +10,7 @@ import {
 } from "./local-storage";
 import { prepareLocalMigration, recordMigrationUpload, uploadLocalMigration } from "./local-migration";
 import { createSnookerMatch } from "./snooker";
+import { createTeamBattleMatch, recordTeamBattleRound } from "./team-battle";
 
 function localArchive() {
   const score = finishMatch(createMatch({
@@ -70,6 +71,26 @@ describe("local migration preparation", () => {
     const migration = await prepareLocalMigration(store, 1_000);
     expect(migration.preview).toMatchObject({ players: 2, matches: 1 });
     expect(JSON.parse(migration.resources.find(({ kind }) => kind === "match")!.snapshotJson)).toEqual(snooker);
+  });
+
+  it("backs up team battles without creating cloud migration resources", async () => {
+    let teamBattle = createTeamBattleMatch({ playerNames: ["团战甲", "团战乙"] }, 600);
+    teamBattle = recordTeamBattleRound(teamBattle, {
+      playerIds: [teamBattle.players[0].id, teamBattle.players[1].id],
+      winnerId: teamBattle.players[0].id,
+      winType: "normal",
+      fouls: {},
+      note: "",
+      startedAt: 610,
+    }, 620);
+    const archive = { ...EMPTY_APP_DATA, activeTeamBattleMatch: teamBattle };
+    const store = new VersionedLocalStore(new MemoryStorageAdapter({ [APP_STORAGE_KEY]: JSON.stringify(archive) }));
+
+    const migration = await prepareLocalMigration(store, 1_000);
+
+    expect(migration.backup.entries).toContainEqual({ key: APP_STORAGE_KEY, value: JSON.stringify(archive) });
+    expect(migration.resources.some(({ localId }) => localId === teamBattle.id)).toBe(false);
+    expect(migration.preview.matches).toBe(0);
   });
 });
 

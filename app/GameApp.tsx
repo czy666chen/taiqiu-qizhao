@@ -5,7 +5,7 @@ import AdminApp from "./AdminApp";
 import { CARD_DEFINITIONS, CardCategory } from "../src/data/cards";
 import { getOfficialDeck, officialDeckCardCount, OfficialDeckId } from "../src/lib/official-decks";
 import type { DeckSnapshot } from "../src/lib/custom-decks";
-import { buildPdf, buildSnookerReport, canvasJpeg, parseMatchReport, renderReportCanvas, splitReportCanvas } from "../src/lib/json-report";
+import { buildSnookerReport, parseMatchReport, renderReportPdf, renderReportPng } from "../src/lib/json-report";
 import {
   addMatchPlayer,
   applyBlackGoldScore,
@@ -99,6 +99,10 @@ import { createRealtimeCardNotice, type RealtimeCardNotice } from "../src/lib/re
 import { createSnookerMatch, getSnookerBreakStats, getSnookerScoreSituation, isSnookerMatch, recordSnookerCommand, SNOOKER_BALL_VALUES, type SnookerBall, type SnookerDraft, type SnookerMatch } from "../src/lib/snooker";
 import { SnookerBoard, SnookerHistoryDetail, SnookerSetupDialog, snookerElapsedMs } from "./SnookerFeature";
 import { useModalDialog } from "./useModalDialog";
+import { completeLocalTeamBattle, hasActiveLocalMatch, startLocalTeamBattle, updateLocalTeamBattle } from "../src/lib/team-battle-app";
+import { getTeamBattleProjection, teamBattleElapsedMs, type TeamBattleDraft, type TeamBattleMatch } from "../src/lib/team-battle";
+import { TeamBattleBoard, TeamBattleHistoryDetail, TeamBattleSetupDialog } from "./TeamBattleFeature";
+import { HeadToHeadScoreboard, type HeadToHeadScoreboardSide } from "./HeadToHeadScoreboard";
 
 const APP_VERSION = "5.3.1";
 
@@ -698,11 +702,12 @@ function ActiveMatchView({ match, readOnly = false, onChange, onFinish, toast }:
   );
 }
 
-function PlayPage({ onStart, onStartEight, onStartSnooker }: { onStart: (mode: MatchMode) => void; onStartEight: () => void; onStartSnooker: () => void }) {
-  return <div className="content-page page-shell"><header className="page-title"><p className="kicker">PLAY MODES</p><h1>今天想怎么玩？</h1><p>从轻松抽牌到完整追分，每种玩法都能独立开始，也能自由组合。</p></header><div className="mode-grid">
+function PlayPage({ onStart, onStartEight, onStartSnooker, onStartTeamBattle }: { onStart: (mode: MatchMode) => void; onStartEight: () => void; onStartSnooker: () => void; onStartTeamBattle: () => void }) {
+  return <div className="content-page page-shell play-page"><header className="page-title"><p className="kicker">PLAY MODES</p><h1>今天想怎么玩？</h1><p>从轻松抽牌到完整追分，每种玩法都能独立开始，也能自由组合。</p></header><div className="mode-grid">
     <article className="mode-card featured"><span className="mode-number">00</span><div className="mode-symbol score">8</div><p className="kicker">CHINESE EIGHT</p><h2>中八双人赛</h2><p>红蓝二等分计分板，记录普胜、炸清、接清、犯规和逐局可追溯流水。</p><ul><li>2 人</li><li>抢 N / 自由局</li><li>离线可用</li></ul><div><button className="primary" onClick={onStartEight}>开始中八设置 <span>→</span></button></div></article>
-    <article className="mode-card"><span className="mode-number">SN</span><div className="mode-symbol snooker">15</div><p className="kicker">SNOOKER</p><h2>标准斯诺克</h2><p>默认标准 15 红，逐球记录红彩顺序、局分、当前单杆与 30+，刷新后完整恢复。</p><ul><li>2 人</li><li>标准 15 红</li><li>离线可用</li></ul><div><button className="primary" onClick={onStartSnooker}>开始标准斯诺克 <span>→</span></button></div></article>
-    <article className="mode-card"><span className="mode-number">01</span><div className="mode-symbol score">＋</div><p className="kicker">SCORE CHASE</p><h2>多人追分</h2><p>快速记录普胜、小金、大金和犯规，自动轮转与排名，适合整晚朋友局。</p><ul><li>2–8 人</li><li>30–120 分钟</li><li>可配规则</li></ul><div><button className="primary" onClick={() => onStart("score")}>开始设置 <span>→</span></button><button className="text-button" onClick={() => onStart("score_cards")}>同时加入奇招牌</button></div></article>
+    <article className="mode-card"><span className="mode-number">01</span><div className="mode-symbol score">＋</div><p className="kicker">SCORE CHASE</p><h2>追分</h2><p>快速记录普胜、小金、大金和犯规，自动轮转与排名，适合整晚朋友局。</p><ul><li>2–8 人</li><li>30–120 分钟</li><li>可配规则</li></ul><div><button className="primary" onClick={() => onStart("score")}>开始设置 <span>→</span></button><button className="text-button" onClick={() => onStart("score_cards")}>同时加入奇招牌</button></div></article>
+    <article className="mode-card team-battle-card"><span className="mode-number">TB</span><div className="mode-symbol score">VS</div><p className="kicker">TEAM BATTLE</p><h2>团队记分</h2><p>2–8 人在本机轮换对阵，自动记住每一组成员的历史比分。</p><ul><li>2–8 人</li><li>轮换对阵</li><li>仅保存在本机</li></ul><div><button className="primary" onClick={onStartTeamBattle}>开始团战设置 <span>→</span></button></div></article>
+    <article className="mode-card"><span className="mode-number">SN</span><div className="mode-symbol snooker">15</div><p className="kicker">SNOOKER</p><h2>斯诺克</h2><p>默认标准 15 红，逐球记录红彩顺序、局分、当前单杆与 30+，刷新后完整恢复。</p><ul><li>2 人</li><li>标准 15 红</li><li>离线可用</li></ul><div><button className="primary" onClick={onStartSnooker}>开始标准斯诺克 <span>→</span></button></div></article>
     <article className="mode-card featured"><span className="mode-number">02</span><div className="mode-symbol">8</div><p className="kicker">TRICK DECK</p><h2>奇招卡牌局</h2><p>51 张实体牌，不放回抽取。每一杆多一个意外，也保留安全跳过机制。</p><ul><li>2 人推荐</li><li>15–60 分钟</li><li>轻松</li></ul><div><button className="secondary" onClick={() => onStart("cards")}>查看并开始</button></div></article>
   </div></div>;
 }
@@ -955,8 +960,20 @@ function durationLabel(ms: number) {
 }
 
 function downloadText(filename: string, content: string, type: string) {
-  const url = URL.createObjectURL(new Blob([content], { type }));
+  downloadBlob(filename, new Blob([content], { type }));
+}
+
+function downloadBlob(filename: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a"); anchor.href = url; anchor.download = filename; anchor.click(); URL.revokeObjectURL(url);
+}
+
+async function downloadReportPng(filename: string, svg: string) {
+  downloadBlob(filename, await renderReportPng(svg));
+}
+
+async function downloadReportPdf(filename: string, svg: string) {
+  downloadBlob(filename, await renderReportPdf(svg));
 }
 
 type ReportOptions = { time: boolean; trend: boolean; stats: boolean };
@@ -969,9 +986,8 @@ function reportDate(timestamp: number) { return new Intl.DateTimeFormat("zh-CN",
 function reportStyles() { return `<style>.title{font:800 42px system-ui,'Noto Sans SC';fill:#f3faf6}.date{font:800 28px system-ui,'Noto Sans SC';fill:#76e6ad}.meta{font:16px system-ui,'Noto Sans SC';fill:#9cb3a8}.section{font:800 22px system-ui,'Noto Sans SC';fill:#eff8f2}.name{font:700 18px system-ui,'Noto Sans SC';fill:#eff8f2}.score{font:800 38px system-ui;fill:#76e6ad}.small{font:14px system-ui,'Noto Sans SC';fill:#91a89d}.row{font:15px system-ui,'Noto Sans SC';fill:#dce9e1}.strong{font:700 15px system-ui,'Noto Sans SC';fill:#eff8f2}.legend{font:700 14px system-ui,'Noto Sans SC'}</style>`; }
 function reportHeader(title: string, subtitle: string, startedAt: number, options: ReportOptions) { return `<rect width="900" height="100%" fill="#07110d"/><circle cx="830" cy="20" r="180" fill="#123325"/><circle cx="860" cy="5" r="110" fill="#17432f"/>${options.time ? `<text x="50" y="58" class="date">${reportDate(startedAt)}</text><text x="52" y="86" class="meta">${new Date(startedAt).getFullYear()} · ${reportClock(startedAt)}</text>` : ""}<text x="50" y="145" class="title">${escapeMarkup(title)}</text><text x="50" y="180" class="meta">${escapeMarkup(subtitle)}</text><line x1="50" y1="208" x2="850" y2="208" stroke="#315445"/>`; }
 function reportChart(series: Array<{ name: string; values: number[] }>, y: number) { const x=62,w=776,h=180,all=series.flatMap((item)=>item.values),min=Math.min(...all,0),range=Math.max(1,Math.max(...all,1)-min); const points=(values:number[])=>values.map((value,index)=>`${x+index*w/Math.max(1,values.length-1)},${y+h-(value-min)/range*h}`).join(" "); return `<rect x="44" y="${y-38}" width="812" height="282" rx="20" fill="#10211a" stroke="#28483a"/><text x="66" y="${y-8}" class="section">比分走势</text>${[0,1,2,3].map((i)=>`<line x1="${x}" y1="${y+i*h/3}" x2="${x+w}" y2="${y+i*h/3}" stroke="#28483a" stroke-dasharray="5 7"/>`).join("")}${series.map((item,i)=>`<polyline points="${points(item.values)}" fill="none" stroke="${REPORT_COLORS[i]}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><text x="${66+(i%4)*190}" y="${y+207+Math.floor(i/4)*24}" class="legend" fill="${REPORT_COLORS[i]}">● ${escapeMarkup(item.name)}</text>`).join("")}`; }
-function openReportPdf(svg: string, title: string) { const popup=window.open("","_blank"); if(!popup)return; popup.opener=null; popup.document.write(`<!doctype html><meta charset="utf-8"><title>${escapeMarkup(title)}</title><style>@page{size:A4 portrait;margin:10mm}body{margin:0;background:#dce7e0}.sheet{width:190mm;margin:12px auto;box-shadow:0 12px 40px #0004}.sheet svg{display:block;width:100%;height:auto}.a11y{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.print{position:fixed;right:20px;bottom:20px;padding:12px 18px;border:0;border-radius:8px;background:#76e6ad;font-weight:800}@media print{body{background:#fff}.sheet{width:100%;margin:0;box-shadow:none}.print{display:none}}</style><h1 class="a11y">${escapeMarkup(title)}</h1><div class="sheet">${svg}</div><button class="print" onclick="print()">打印 / 另存 PDF</button>`); popup.document.close(); }
 function ReportOptionFields({ options, onChange }: { options: ReportOptions; onChange: (options: ReportOptions) => void }) { const toggle=(key:keyof ReportOptions)=>onChange({...options,[key]:!options[key]}); return <div className="report-options" aria-label="导出内容"><label><input type="checkbox" checked={options.time} onChange={()=>toggle("time")} /> 日期与逐条时间</label><label><input type="checkbox" checked={options.trend} onChange={()=>toggle("trend")} /> 比分走势</label><label><input type="checkbox" checked={options.stats} onChange={()=>toggle("stats")} /> 分类统计</label></div>; }
-function ReportControls({ options, onChange, onImage, onPdf }: { options: ReportOptions; onChange: (options: ReportOptions) => void; onImage: () => void; onPdf: () => void }) { return <div className="report-controls"><ReportOptionFields options={options} onChange={onChange} /><div className="export-actions"><button onClick={onImage}>保存竖版长图</button><button onClick={onPdf}>打印 / PDF</button></div></div>; }
+function ReportControls({ options, onChange, onImage, onPdf }: { options: ReportOptions; onChange: (options: ReportOptions) => void; onImage: () => void; onPdf: () => void }) { return <div className="report-controls"><ReportOptionFields options={options} onChange={onChange} /><div className="export-actions"><button onClick={onImage}>保存竖版长图</button><button onClick={onPdf}>下载 PDF</button></div></div>; }
 function exportEightBallJson(match: EightBallMatch) {
   const payload = { exportVersion: 1, exportedAt: new Date().toISOString(), match, effectiveRounds: getEffectiveEightBallRounds(match), stats: calculateEightBallStats(match) };
   downloadText(`中八战绩-${match.id}.json`, JSON.stringify(payload, null, 2), "application/json");
@@ -1005,8 +1021,8 @@ function exportSnookerJson(match: SnookerMatch) {
   }, null, 2), "application/json");
 }
 
-function printSnooker(match: SnookerMatch, options: ReportOptions) { openReportPdf(buildSnookerReport(match, options), match.title || "斯诺克比赛"); }
-function exportSnookerImage(match: SnookerMatch, options: ReportOptions) { downloadText(`斯诺克战绩-${match.id}.svg`, buildSnookerReport(match, options), "image/svg+xml"); }
+function printSnooker(match: SnookerMatch, options: ReportOptions) { return downloadReportPdf(`斯诺克战绩-${match.id}.pdf`, buildSnookerReport(match, options)); }
+function exportSnookerImage(match: SnookerMatch, options: ReportOptions) { return downloadReportPng(`斯诺克战绩-${match.id}.png`, buildSnookerReport(match, options)); }
 
 type UserDeckSummary = { id: string; name: string; current_version: number; updated_at: number };
 
@@ -1027,8 +1043,8 @@ async function loadUserDeck(id: string): Promise<{ currentVersion: number; snaps
   const payload = await apiPayload<{ deck: { currentVersion: number; snapshot: DeckSnapshot } }>(await fetch(`/api/decks/${id}`));
   return payload.deck;
 }
-function printEightBall(match: EightBallMatch, options: ReportOptions) { openReportPdf(buildEightBallReport(match,options),match.title||"中八双人赛"); }
-function exportEightBallImage(match: EightBallMatch, options: ReportOptions) { downloadText(`中八战绩-${match.id}.svg`,buildEightBallReport(match,options),"image/svg+xml"); }
+function printEightBall(match: EightBallMatch, options: ReportOptions) { return downloadReportPdf(`中八战绩-${match.id}.pdf`, buildEightBallReport(match, options)); }
+function exportEightBallImage(match: EightBallMatch, options: ReportOptions) { return downloadReportPng(`中八战绩-${match.id}.png`, buildEightBallReport(match, options)); }
 function EightBallBoard({ match, onChange, onFinish, toast }: { match: EightBallMatch; onChange: (match: EightBallMatch) => void; onFinish: () => void; toast: (message: string) => void }) {
   const [, tick] = useState(0); const [winnerId, setWinnerId] = useState(match.players[0].id); const [winType, setWinType] = useState<EightBallWinType>("normal"); const [fouls, setFouls] = useState<Record<string, number>>({}); const [note, setNote] = useState(""); const [roundStartedAt, setRoundStartedAt] = useState(() => Date.now()); const [editingEventId, setEditingEventId] = useState<string | null>(null);
   useEffect(() => { const timer = window.setInterval(() => tick((value) => value + 1), 1000); return () => window.clearInterval(timer); }, []);
@@ -1048,7 +1064,7 @@ function EightBallBoard({ match, onChange, onFinish, toast }: { match: EightBall
     cards: match.cards,
   } : undefined;
   const confirm = () => { const round = { winnerId, winType, fouls: Object.fromEntries(match.players.map((p) => [p.id, Math.max(0, Math.trunc(fouls[p.id] ?? 0))])), note, startedAt: roundStartedAt }; const updated = editingEventId ? correctEightBallRound(match, editingEventId, { ...round, confirmedAt: Date.now() }) : recordEightBallRound(match, round); onChange(updated); setFouls({}); setNote(""); setRoundStartedAt(Date.now()); setEditingEventId(null); toast(editingEventId ? "已追加更正事件并重新计算全部统计" : "本局已记录并自动保存"); };
-  return <div className="eight-page page-shell"><section className="eight-topbar"><div><span className="live-label"><i /> 中八比赛进行中</span><h1>{match.title || `第 ${rounds.length + 1} 局`}</h1><p>第 {rounds.length + 1} 局 · {durationLabel(eightBallElapsedMs(match))}{match.raceTo ? ` · 抢 ${match.raceTo} 局` : " · 自由局"}</p></div><div><button onClick={() => onChange({ ...match, layout: match.layout === "stacked" ? "split" : "stacked" })}>{match.layout === "stacked" ? "切换左右" : "切换上下"}</button><button onClick={() => onChange(match.pausedAt ? resumeEightBallMatch(match) : pauseEightBallMatch(match))}>{match.pausedAt ? "继续计时" : "暂停计时"}</button><button className="danger-text" onClick={onFinish}>结束比赛</button></div></section>{match.pausedAt && <div className="eight-paused">比赛已暂停，计时和逐局录入已停止。</div>}{reached && <div className="target-notice">已达到目标局数；比赛不会自动锁死，请确认无误后手动结束。</div>}<section className={`eight-scoreboard ${match.layout}`}>{match.players.map((player, index) => <article key={player.id} className={index ? "blue" : "red"}><div><input aria-label={`${player.name}姓名`} value={player.name} onChange={(event) => onChange(renameEightBallPlayer(match, player.id, event.target.value))} /><small>{index ? "BLUE" : "RED"}</small></div><strong>{stats[player.id].score}</strong><dl><div><dt>普胜</dt><dd>{stats[player.id].normal}</dd></div><div><dt>炸清</dt><dd>{stats[player.id].breakClear}</dd></div><div><dt>接清</dt><dd>{stats[player.id].runout}</dd></div><div><dt>犯规</dt><dd>{stats[player.id].fouls}</dd></div></dl></article>)}</section>{cardMatch && <CardBoard match={cardMatch} onChange={(updated) => onChange({ ...match, cards: updated.cards })} toast={toast} />}<section className="eight-round-panel"><div className="section-heading"><div><p className="kicker">ROUND {rounds.length + 1}</p><h2>记录本局结果</h2></div><button className="text-button" disabled={!rounds.length} onClick={() => { onChange(undoLastEightBallRound(match)); toast("已追加撤销事件，原流水保留"); }}>↶ 撤销上一局</button></div><div className="eight-winner-picker">{match.players.map((player) => <button key={player.id} className={winnerId === player.id ? "active" : ""} onClick={() => setWinnerId(player.id)}>{player.name} 获胜</button>)}</div><div className="segmented">{Object.entries(EIGHT_BALL_WIN_LABELS).map(([id, label]) => <button key={id} className={winType === id ? "active" : ""} onClick={() => setWinType(id as EightBallWinType)}>{label}</button>)}</div><div className="eight-fouls">{match.players.map((player) => <label key={player.id}><span>{player.name} 本局犯规</span><input type="number" min="0" inputMode="numeric" value={fouls[player.id] ?? 0} onChange={(event) => setFouls({ ...fouls, [player.id]: Number(event.target.value) })} /></label>)}</div><label className="score-note"><span>本局备注</span><input maxLength={120} placeholder="可选" value={note} onChange={(event) => setNote(event.target.value)} /></label><button className="primary eight-confirm" disabled={!!match.pausedAt} onClick={confirm}>确认本局并进入下一局</button></section><section className="eight-ledger"><div className="section-heading"><div><p className="kicker">APPEND-ONLY LEDGER</p><h2>逐局流水</h2></div><span>{match.events.length} 条原始事件</span></div>{[...rounds].reverse().map((round, reverseIndex) => <article key={round.eventId}><span>第${rounds.length - reverseIndex} 局</span><div><b>{match.players.find((p) => p.id === round.winnerId)?.name} · {EIGHT_BALL_WIN_LABELS[round.winType]}</b><small>开球：{match.players.find((p) => p.id === round.serverId)?.name} · 犯规 {match.players.map((p) => `${p.name} ${round.fouls[p.id] ?? 0}`).join(" / ")} · {durationLabel(round.confirmedAt - round.startedAt)}{round.note ? ` · ${round.note}` : ""}</small></div><strong>{match.players.map((p) => round.after[p.id] ?? 0).join(" : ")}</strong><button onClick={() => { const other = match.players.find((p) => p.id !== round.winnerId)!; onChange(correctEightBallRound(match, round.eventId, { ...round, winnerId: other.id })); toast("已追加更正事件并重新计算全部统计"); }}>改判胜者</button></article>)}</section></div>;
+  return <div className="eight-page page-shell"><section className="eight-topbar"><div><span className="live-label"><i /> 中八比赛进行中</span><h1>{match.title || `第 ${rounds.length + 1} 局`}</h1><p>第 {rounds.length + 1} 局 · {durationLabel(eightBallElapsedMs(match))}{match.raceTo ? ` · 抢 ${match.raceTo} 局` : " · 自由局"}</p></div><div><button onClick={() => onChange({ ...match, layout: match.layout === "stacked" ? "split" : "stacked" })}>{match.layout === "stacked" ? "切换左右" : "切换上下"}</button><button onClick={() => onChange(match.pausedAt ? resumeEightBallMatch(match) : pauseEightBallMatch(match))}>{match.pausedAt ? "继续计时" : "暂停计时"}</button><button className="danger-text" onClick={onFinish}>结束比赛</button></div></section>{match.pausedAt && <div className="eight-paused">比赛已暂停，计时和逐局录入已停止。</div>}{reached && <div className="target-notice">已达到目标局数；比赛不会自动锁死，请确认无误后手动结束。</div>}<HeadToHeadScoreboard layout={match.layout} onNameChange={(playerId, name) => onChange(renameEightBallPlayer(match, playerId, name))} sides={match.players.map((player, index) => ({ id: player.id, name: player.name, label: index ? "BLUE" : "RED", score: stats[player.id].score, stats: [{ label: "普胜", value: stats[player.id].normal }, { label: "炸清", value: stats[player.id].breakClear }, { label: "接清", value: stats[player.id].runout }, { label: "犯规", value: stats[player.id].fouls }] })) as [HeadToHeadScoreboardSide, HeadToHeadScoreboardSide]} />{cardMatch && <CardBoard match={cardMatch} onChange={(updated) => onChange({ ...match, cards: updated.cards })} toast={toast} />}<section className="eight-round-panel"><div className="section-heading"><div><p className="kicker">ROUND {rounds.length + 1}</p><h2>记录本局结果</h2></div><button className="text-button" disabled={!rounds.length} onClick={() => { onChange(undoLastEightBallRound(match)); toast("已追加撤销事件，原流水保留"); }}>↶ 撤销上一局</button></div><div className="eight-winner-picker">{match.players.map((player) => <button key={player.id} className={winnerId === player.id ? "active" : ""} onClick={() => setWinnerId(player.id)}>{player.name} 获胜</button>)}</div><div className="segmented">{Object.entries(EIGHT_BALL_WIN_LABELS).map(([id, label]) => <button key={id} className={winType === id ? "active" : ""} onClick={() => setWinType(id as EightBallWinType)}>{label}</button>)}</div><div className="eight-fouls">{match.players.map((player) => <label key={player.id}><span>{player.name} 本局犯规</span><input type="number" min="0" inputMode="numeric" value={fouls[player.id] ?? 0} onChange={(event) => setFouls({ ...fouls, [player.id]: Number(event.target.value) })} /></label>)}</div><label className="score-note"><span>本局备注</span><input maxLength={120} placeholder="可选" value={note} onChange={(event) => setNote(event.target.value)} /></label><button className="primary eight-confirm" disabled={!!match.pausedAt} onClick={confirm}>确认本局并进入下一局</button></section><section className="eight-ledger"><div className="section-heading"><div><p className="kicker">APPEND-ONLY LEDGER</p><h2>逐局流水</h2></div><span>{match.events.length} 条原始事件</span></div>{[...rounds].reverse().map((round, reverseIndex) => <article key={round.eventId}><span>第${rounds.length - reverseIndex} 局</span><div><b>{match.players.find((p) => p.id === round.winnerId)?.name} · {EIGHT_BALL_WIN_LABELS[round.winType]}</b><small>开球：{match.players.find((p) => p.id === round.serverId)?.name} · 犯规 {match.players.map((p) => `${p.name} ${round.fouls[p.id] ?? 0}`).join(" / ")} · {durationLabel(round.confirmedAt - round.startedAt)}{round.note ? ` · ${round.note}` : ""}</small></div><strong>{match.players.map((p) => round.after[p.id] ?? 0).join(" : ")}</strong><button onClick={() => { const other = match.players.find((p) => p.id !== round.winnerId)!; onChange(correctEightBallRound(match, round.eventId, { ...round, winnerId: other.id })); toast("已追加更正事件并重新计算全部统计"); }}>改判胜者</button></article>)}</section></div>;
 }
 
 function HistoryCorrectionDock({ match, onChange }: { match: BilliardsMatch; onChange: (match: BilliardsMatch) => void }) {
@@ -1079,14 +1095,14 @@ function buildScoreReport(match: BilliardsMatch, options: ReportOptions) {
   parts.push(...timeline.map((event,index)=>{const rowY=y+index*55,prefix=options.time?`${reportClock(event.at)}  `:""; const detail=`${prefix}${event.kind} · ${event.player} · ${event.label}`.slice(0,48); return `<rect x="50" y="${rowY}" width="800" height="46" rx="10" fill="${index%2?"#0d1b16":"#10211a"}"/><text x="70" y="${rowY+29}" class="row">${escapeMarkup(detail)}</text><text x="830" y="${rowY+29}" text-anchor="end" class="strong">${escapeMarkup(event.detail.slice(0,28))}</text>`;})); y+=timeline.length*55+55;
   const height=Math.max(1200,y); return `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="${height}" viewBox="0 0 900 ${height}">${reportStyles()}${parts.join("")}<text x="450" y="${height-25}" text-anchor="middle" class="small">台球奇招 · MATCH REPORT</text></svg>`;
 }
-function printScoreMatch(match: BilliardsMatch, options: ReportOptions) { openReportPdf(buildScoreReport(match,options),"追分战绩"); }
-function exportScoreImage(match: BilliardsMatch, options: ReportOptions) { downloadText(`追分战绩-${match.id}.svg`,buildScoreReport(match,options),"image/svg+xml"); }
-function UnifiedHistoryPage({ history, eightBallHistory, snookerHistory, selectedId, onSelect, onDeleteMatch }: { history: BilliardsMatch[]; eightBallHistory: EightBallMatch[]; snookerHistory: SnookerMatch[]; selectedId?: string; onSelect: (id: string) => void; onDeleteMatch: (id: string) => void }) {
+function printScoreMatch(match: BilliardsMatch, options: ReportOptions) { return downloadReportPdf(`追分战绩-${match.id}.pdf`, buildScoreReport(match, options)); }
+function exportScoreImage(match: BilliardsMatch, options: ReportOptions) { return downloadReportPng(`追分战绩-${match.id}.png`, buildScoreReport(match, options)); }
+function UnifiedHistoryPage({ history, eightBallHistory, snookerHistory, teamBattleHistory, selectedId, onSelect, onDeleteMatch }: { history: BilliardsMatch[]; eightBallHistory: EightBallMatch[]; snookerHistory: SnookerMatch[]; teamBattleHistory: TeamBattleMatch[]; selectedId?: string; onSelect: (id: string) => void; onDeleteMatch: (id: string) => void }) {
   const selected = history.find((match) => match.id === selectedId);
   const [reportOptions, setReportOptions] = useState(DEFAULT_REPORT_OPTIONS);
   if (!selected) {
-    const all = [...history.map((match) => ({ at: match.endedAt ?? match.startedAt, kind: "legacy" as const, match })), ...eightBallHistory.map((match) => ({ at: match.endedAt ?? match.startedAt, kind: "eight" as const, match })), ...snookerHistory.map((match) => ({ at: match.endedAt ?? match.startedAt, kind: "snooker" as const, match }))].sort((a, b) => b.at - a.at);
-    return <div className="content-page page-shell"><header className="page-title"><p className="kicker">MATCH HISTORY</p><h1>战绩</h1><p>斯诺克、中八与追分使用统一的战绩入口。</p></header>{all.length ? <div className="history-grid">{all.map((item) => { if (item.kind === "snooker") { const match = item.match; const stats = getSnookerBreakStats(match); const winner = [...match.players].sort((a, b) => match.framesWon[b.id] - match.framesWon[a.id])[0]; return <div className="history-card" key={match.id}><button className="history-card-main" onClick={() => onSelect(match.id)}><span className="history-type snooker">斯诺克</span><b>{match.players.map((player) => player.name).join(" · ")}</b><small>{formatTime(match.startedAt)} · {durationLabel(snookerElapsedMs(match))}</small><div><span>局分</span><strong>{winner.name} · {match.players.map((player) => match.framesWon[player.id]).join(" : ")} · 最高单杆 {stats.highestBreak}</strong><i>→</i></div></button><button className="history-delete" onClick={() => onDeleteMatch(match.id)}>删除</button></div>; } if (item.kind === "eight") { const match = item.match; const stats = calculateEightBallStats(match); const winner = [...match.players].sort((a, b) => stats[b.id].score - stats[a.id].score)[0]; return <div className="history-card" key={match.id}><button className="history-card-main" onClick={() => onSelect(match.id)}><span className="history-type eight">中八双人赛</span><b>{match.players.map((player) => player.name).join(" · ")}</b><small>{formatTime(match.startedAt)} · {durationLabel(eightBallElapsedMs(match))}</small><div><span>获胜者</span><strong>{winner.name} · {match.players.map((p) => stats[p.id].score).join(" : ")}</strong><i>→</i></div></button><button className="history-delete" onClick={() => onDeleteMatch(match.id)}>删除</button></div>; } const match = item.match; const winner = getRankings(match)[0]; return <div className="history-card" key={match.id}><button className="history-card-main" onClick={() => onSelect(match.id)}><span className="history-type">{match.mode === "cards" ? "奇招牌" : match.mode === "score_cards" ? "追分 + 奇招牌" : "多人追分"}</span><b>{match.players.map((player) => player.name).join(" · ")}</b><small>{formatTime(match.startedAt)} · {formatDuration(match.startedAt, match.endedAt)}</small><div><span>第一名</span><strong>{winner?.name}{match.mode !== "cards" && ` · ${winner?.score} 分`}</strong><i>→</i></div></button><button className="history-delete" onClick={() => onDeleteMatch(match.id)}>删除</button></div>; })}</div> : <div className="large-empty"><span>⌁</span><h2>还没有战绩</h2><p>完成第一场比赛后，逐局流水会保存在这里。</p></div>}</div>;
+    const all = [...history.map((match) => ({ at: match.endedAt ?? match.startedAt, kind: "legacy" as const, match })), ...eightBallHistory.map((match) => ({ at: match.endedAt ?? match.startedAt, kind: "eight" as const, match })), ...snookerHistory.map((match) => ({ at: match.endedAt ?? match.startedAt, kind: "snooker" as const, match })), ...teamBattleHistory.map((match) => ({ at: match.endedAt ?? match.startedAt, kind: "team" as const, match }))].sort((a, b) => b.at - a.at);
+    return <div className="content-page page-shell"><header className="page-title"><p className="kicker">MATCH HISTORY</p><h1>战绩</h1><p>团战、斯诺克、中八与追分使用统一的战绩入口。</p></header>{all.length ? <div className="history-grid">{all.map((item) => { if (item.kind === "team") { const match = item.match; const projection = getTeamBattleProjection(match); const leader = projection.standings[0]; return <div className="history-card" key={match.id}><button className="history-card-main" onClick={() => onSelect(match.id)}><span className="history-type team">团战记分</span><b>{match.players.map((player) => player.name).join(" · ")}</b><small>{formatTime(match.startedAt)} · {durationLabel(teamBattleElapsedMs(match, match.endedAt))}</small><div><span>总览</span><strong>{leader ? `${leader.player.name} 暂列第 1 · ` : ""}{projection.rounds.length} 局 · {projection.pairs.length} 组交手</strong><i>→</i></div></button><button className="history-delete" onClick={() => onDeleteMatch(match.id)}>删除</button></div>; } if (item.kind === "snooker") { const match = item.match; const stats = getSnookerBreakStats(match); const winner = [...match.players].sort((a, b) => match.framesWon[b.id] - match.framesWon[a.id])[0]; return <div className="history-card" key={match.id}><button className="history-card-main" onClick={() => onSelect(match.id)}><span className="history-type snooker">斯诺克</span><b>{match.players.map((player) => player.name).join(" · ")}</b><small>{formatTime(match.startedAt)} · {durationLabel(snookerElapsedMs(match))}</small><div><span>局分</span><strong>{winner.name} · {match.players.map((player) => match.framesWon[player.id]).join(" : ")} · 最高单杆 {stats.highestBreak}</strong><i>→</i></div></button><button className="history-delete" onClick={() => onDeleteMatch(match.id)}>删除</button></div>; } if (item.kind === "eight") { const match = item.match; const stats = calculateEightBallStats(match); const winner = [...match.players].sort((a, b) => stats[b.id].score - stats[a.id].score)[0]; return <div className="history-card" key={match.id}><button className="history-card-main" onClick={() => onSelect(match.id)}><span className="history-type eight">中八双人赛</span><b>{match.players.map((player) => player.name).join(" · ")}</b><small>{formatTime(match.startedAt)} · {durationLabel(eightBallElapsedMs(match))}</small><div><span>获胜者</span><strong>{winner.name} · {match.players.map((p) => stats[p.id].score).join(" : ")}</strong><i>→</i></div></button><button className="history-delete" onClick={() => onDeleteMatch(match.id)}>删除</button></div>; } const match = item.match; const winner = getRankings(match)[0]; return <div className="history-card" key={match.id}><button className="history-card-main" onClick={() => onSelect(match.id)}><span className="history-type">{match.mode === "cards" ? "奇招牌" : match.mode === "score_cards" ? "追分 + 奇招牌" : "多人追分"}</span><b>{match.players.map((player) => player.name).join(" · ")}</b><small>{formatTime(match.startedAt)} · {formatDuration(match.startedAt, match.endedAt)}</small><div><span>第一名</span><strong>{winner?.name}{match.mode !== "cards" && ` · ${winner?.score} 分`}</strong><i>→</i></div></button><button className="history-delete" onClick={() => onDeleteMatch(match.id)}>删除</button></div>; })}</div> : <div className="large-empty"><span>⌁</span><h2>还没有战绩</h2><p>完成第一场比赛后，逐局流水会保存在这里。</p></div>}</div>;
   }
   const rankings = getRankings(selected);
   const timeline = [
@@ -2122,21 +2138,13 @@ function AccountDataPanel({ onDeleted }: { onDeleted: () => void }) {
   const [reportError, setReportError] = useState("");
   const [reportOptions, setReportOptions] = useState(DEFAULT_REPORT_OPTIONS);
   const [converting, setConverting] = useState<"" | "png" | "pdf">("");
-  const download = (blob: Blob, filename: string) => {
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  };
   const exportData = async () => {
     setBusy(true); setMessage("");
     try {
       const response = await fetch("/api/account/export");
       if (!response.ok) throw new Error(((await response.json()) as { error?: string }).error ?? "导出失败");
       const blob = await response.blob();
-      download(blob, `台球奇招-账号数据-${Date.now()}.json`);
+      downloadBlob(`台球奇招-账号数据-${Date.now()}.json`, blob);
       setMessage("账号 JSON 已导出");
     } catch (error) { setMessage(error instanceof Error ? error.message : "导出失败"); }
     finally { setBusy(false); }
@@ -2156,21 +2164,11 @@ function AccountDataPanel({ onDeleted }: { onDeleted: () => void }) {
     try {
       const match = parseMatchReport(reportJson);
       const svg = isSnookerMatch(match) ? buildSnookerReport(match, reportOptions) : isEightBallMatch(match) ? buildEightBallReport(match, reportOptions) : buildScoreReport(match, reportOptions);
-      const canvas = await renderReportCanvas(svg);
       if (format === "png") {
-        const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error("长图生成失败")), "image/png"));
-        download(blob, `${reportName}-长图.png`);
+        downloadBlob(`${reportName}-长图.png`, await renderReportPng(svg));
       } else {
-        const pages = splitReportCanvas(canvas).map((pageCanvas) => {
-          const page = canvasJpeg(pageCanvas);
-          pageCanvas.width = 1;
-          pageCanvas.height = 1;
-          return page;
-        });
-        download(new Blob([buildPdf(pages) as BlobPart], { type: "application/pdf" }), `${reportName}.pdf`);
+        downloadBlob(`${reportName}.pdf`, await renderReportPdf(svg));
       }
-      canvas.width = 1;
-      canvas.height = 1;
     } catch (error) { setReportError(error instanceof Error ? error.message : "转换失败"); }
     finally { setConverting(""); }
   };
@@ -2251,6 +2249,7 @@ export default function GameApp() {
   const [setupMode, setSetupMode] = useState<MatchMode | null>(null);
   const [eightSetupOpen, setEightSetupOpen] = useState(false);
   const [snookerSetupOpen, setSnookerSetupOpen] = useState(false);
+  const [teamBattleSetupOpen, setTeamBattleSetupOpen] = useState(false);
   const [eightDefaultLayout, setEightDefaultLayout] = useState<EightBallLayout>("stacked");
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [pendingMode, setPendingMode] = useState<MatchMode | null>(null);
@@ -2258,7 +2257,7 @@ export default function GameApp() {
   const [storageIssue, setStorageIssue] = useState<StorageIssue | null>(null);
   const [status, setStatus] = useState("");
   const [deletedMatches, setDeletedMatches] = useState<string[]>([]);
-  const [deleteTarget, setDeleteTarget] = useState<{ kind: "eight"; match: EightBallMatch } | { kind: "snooker"; match: SnookerMatch } | { kind: "legacy"; match: BilliardsMatch } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ kind: "eight"; match: EightBallMatch } | { kind: "snooker"; match: SnookerMatch } | { kind: "team"; match: TeamBattleMatch } | { kind: "legacy"; match: BilliardsMatch } | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [theme, setTheme] = useState<ThemeMode>(() => typeof window !== "undefined" && browserStore().getRaw(APP_THEME_KEY) === "day" ? "day" : "night");
@@ -2444,7 +2443,7 @@ export default function GameApp() {
   };
 
   const start = (draft: MatchDraft, scorePresets: ScorePreset[]) => {
-    if (data.activeMatch || data.activeEightBallMatch || data.activeSnookerMatch) return;
+    if (hasActiveLocalMatch(data)) return;
     const match = createMatch(draft);
     setData({ ...data, activeMatch: match, savedRules: draft.rules, scorePresets });
     setSetupMode(null);
@@ -2460,6 +2459,7 @@ export default function GameApp() {
     setData((current) => ({ ...current, activeEightBallMatch: match }));
   };
   const updateSnooker = (match: SnookerMatch) => setData((current) => ({ ...current, activeSnookerMatch: match }));
+  const updateTeamBattle = (match: TeamBattleMatch) => setData((current) => updateLocalTeamBattle(current, match));
   const complete = () => {
     if (!data.activeMatch) return;
     const completed = finishMatch(data.activeMatch);
@@ -2488,7 +2488,7 @@ export default function GameApp() {
   };
 
   const startEight = (draft: EightBallDraft) => {
-    if (data.activeMatch || data.activeEightBallMatch || data.activeSnookerMatch) return;
+    if (hasActiveLocalMatch(data)) return;
     const match = createEightBallMatch(draft);
     browserStore().setRaw(EIGHT_BALL_LAYOUT_KEY, match.layout);
     setData({ ...data, activeEightBallMatch: match });
@@ -2499,12 +2499,12 @@ export default function GameApp() {
   };
 
   const openEightSetup = () => {
-    if (data.activeMatch || data.activeEightBallMatch || data.activeSnookerMatch) { setStatus("请先结束当前对局，再创建中八比赛"); navigate("/"); return; }
+    if (hasActiveLocalMatch(data)) { setStatus("请先结束当前对局，再创建中八比赛"); navigate("/"); return; }
     setEightSetupOpen(true);
   };
 
   const startSnooker = (draft: SnookerDraft) => {
-    if (data.activeMatch || data.activeEightBallMatch || data.activeSnookerMatch) return;
+    if (hasActiveLocalMatch(data)) return;
     setData({ ...data, activeSnookerMatch: createSnookerMatch(draft) });
     setSnookerSetupOpen(false);
     setActiveReadOnly(false);
@@ -2513,12 +2513,34 @@ export default function GameApp() {
   };
 
   const openSnookerSetup = () => {
-    if (data.activeMatch || data.activeEightBallMatch || data.activeSnookerMatch) { setStatus("请先结束当前对局，再创建斯诺克比赛"); navigate("/"); return; }
+    if (hasActiveLocalMatch(data)) { setStatus("请先结束当前对局，再创建斯诺克比赛"); navigate("/"); return; }
     setSnookerSetupOpen(true);
   };
 
+  const startTeamBattle = (draft: TeamBattleDraft) => {
+    setData((current) => startLocalTeamBattle(current, draft));
+    setTeamBattleSetupOpen(false);
+    setActiveReadOnly(false);
+    navigate("/");
+    setStatus("团战已开始并仅保存到本机");
+  };
+
+  const openTeamBattleSetup = () => {
+    if (hasActiveLocalMatch(data)) { setStatus("请先结束当前对局，再创建团战"); navigate("/"); return; }
+    setTeamBattleSetupOpen(true);
+  };
+
+  const completeTeamBattle = () => {
+    if (!data.activeTeamBattleMatch) return;
+    const completed = completeLocalTeamBattle(data);
+    setData(completed);
+    setConfirmEnd(false);
+    navigate(`/history/${completed.teamBattleHistory[0].id}`);
+    setStatus("团战已结束，完整流水已保存到本机");
+  };
+
   const openSetup = (mode: MatchMode) => {
-    if (data.activeEightBallMatch || data.activeSnookerMatch) { setStatus("请先结束当前双人比赛，再创建其他对局"); navigate("/"); return; }
+    if (data.activeEightBallMatch || data.activeSnookerMatch || data.activeTeamBattleMatch) { setStatus("请先结束当前对局，再创建其他对局"); navigate("/"); return; }
     if (data.activeMatch) {
       setPendingMode(mode);
       setDiscardArmed(false);
@@ -2546,7 +2568,7 @@ export default function GameApp() {
   };
   const resumePaused = (id: string) => {
     const selected = data.pausedMatches.find((match) => match.id === id);
-    if (!selected || data.activeMatch) return;
+    if (!selected || hasActiveLocalMatch(data)) return;
     setData({ ...data, activeMatch: selected, pausedMatches: data.pausedMatches.filter((match) => match.id !== id) });
     navigate("/");
     setStatus("已恢复保存的未结束对局");
@@ -2597,6 +2619,12 @@ export default function GameApp() {
   };
 
   const deleteMatchRecord = async (id: string) => {
+    if (data.teamBattleHistory.some((match) => match.id === id)) {
+      setData((current) => ({ ...current, teamBattleHistory: current.teamBattleHistory.filter((match) => match.id !== id) }));
+      setStatus("团战战绩已从本机删除");
+      navigate("/history");
+      return;
+    }
     // Local removal is the primary action and always succeeds; the cloud
     // delete is best-effort and retried on the next sync run.
     setData((current) => ({
@@ -2644,10 +2672,12 @@ export default function GameApp() {
   };
 
   const requestDelete = (id: string) => {
+    const team = data.teamBattleHistory.find((match) => match.id === id);
     const snooker = data.snookerHistory.find((match) => match.id === id);
     const eight = data.eightBallHistory.find((match) => match.id === id);
     const legacy = data.history.find((match) => match.id === id);
     setDeleteError("");
+    if (team) { setDeleteTarget({ kind: "team", match: team }); return; }
     if (snooker) { setDeleteTarget({ kind: "snooker", match: snooker }); return; }
     if (eight) { setDeleteTarget({ kind: "eight", match: eight }); return; }
     if (legacy) { setDeleteTarget({ kind: "legacy", match: legacy }); return; }
@@ -2658,12 +2688,14 @@ export default function GameApp() {
       ? <div className={activeReadOnly ? "read-only-match" : ""}>{activeReadOnly && <section className="readonly-banner"><b>只读模式</b><span>请先在“我的”页面明确接管，再继续写入。</span></section>}<SnookerBoard match={data.activeSnookerMatch} onChange={activeReadOnly ? () => setStatus("只读模式不能修改") : updateSnooker} onFinish={() => !activeReadOnly && setConfirmEnd(true)} toast={setStatus} /></div>
       : data.activeEightBallMatch
       ? <div className={activeReadOnly ? "read-only-match" : ""}>{activeReadOnly && <section className="readonly-banner"><b>只读模式</b><span>请先在“我的”页面明确接管，再继续写入。</span></section>}<EightBallBoard match={data.activeEightBallMatch} onChange={activeReadOnly ? () => setStatus("只读模式不能修改") : updateEight} onFinish={() => !activeReadOnly && setConfirmEnd(true)} toast={setStatus} /></div>
+      : data.activeTeamBattleMatch
+        ? <TeamBattleBoard match={data.activeTeamBattleMatch} onChange={updateTeamBattle} onFinish={() => setConfirmEnd(true)} toast={setStatus} />
       : data.activeMatch
         ? <ActiveMatchView match={data.activeMatch} readOnly={activeReadOnly} onChange={activeReadOnly ? () => setStatus("只读模式不能修改") : updateActive} onFinish={() => setConfirmEnd(true)} toast={setStatus} />
         : <div className="home-stack">
             <EmptyHome onStart={openSetup} onStartEight={openEightSetup} onStartSnooker={openSnookerSetup} onNavigate={navigate} onResume={resumePaused} recent={data.history[0]} paused={data.pausedMatches} user={user} onEnterCloudRoom={enterCloudRoom} />
           </div>;
-    if (path === "/play") return <PlayPage onStart={openSetup} onStartEight={openEightSetup} onStartSnooker={openSnookerSetup} />;
+    if (path === "/play") return <PlayPage onStart={openSetup} onStartEight={openEightSetup} onStartSnooker={openSnookerSetup} onStartTeamBattle={openTeamBattleSetup} />;
     if (path === "/room" || path.startsWith("/room/")) {
       if (!user) return (
         <div className="room-page page-shell">
@@ -2680,9 +2712,11 @@ export default function GameApp() {
       const selectedMatch = data.history.find((match) => match.id === selectedId);
       const selectedEight = data.eightBallHistory.find((match) => match.id === selectedId);
       const selectedSnooker = data.snookerHistory.find((match) => match.id === selectedId);
+      const selectedTeam = data.teamBattleHistory.find((match) => match.id === selectedId);
+      if (selectedTeam) return <TeamBattleHistoryDetail match={selectedTeam} onBack={() => navigate("/history")} onDelete={requestDelete} />;
       if (selectedSnooker) return <SnookerHistoryReportDetail match={selectedSnooker} onBack={() => navigate("/history")} onDelete={requestDelete} />;
       if (selectedEight) return <EightBallHistoryDetail match={selectedEight} onBack={() => navigate("/history")} onDelete={requestDelete} />;
-      return <><UnifiedHistoryPage history={data.history} eightBallHistory={data.eightBallHistory} snookerHistory={data.snookerHistory} selectedId={selectedId} onSelect={(id) => navigate(id ? `/history/${id}` : "/history")} onDeleteMatch={requestDelete} />{selectedMatch && selectedMatch.scoreEvents.length > 0 && <HistoryCorrectionDock match={selectedMatch} onChange={(updated) => setData({ ...data, history: data.history.map((match) => match.id === updated.id ? updated : match) })} />}</>;
+      return <><UnifiedHistoryPage history={data.history} eightBallHistory={data.eightBallHistory} snookerHistory={data.snookerHistory} teamBattleHistory={data.teamBattleHistory} selectedId={selectedId} onSelect={(id) => navigate(id ? `/history/${id}` : "/history")} onDeleteMatch={requestDelete} />{selectedMatch && selectedMatch.scoreEvents.length > 0 && <HistoryCorrectionDock match={selectedMatch} onChange={(updated) => setData({ ...data, history: data.history.map((match) => match.id === updated.id ? updated : match) })} />}</>;
     }
     if (path === "/profile") return <ProfilePage history={data.history} user={user} authLoading={authLoading} sync={sync} onAuthenticated={(nextUser) => { setUser(nextUser); setStatus("账号已连接，正在检查离线队列"); }} onLogout={() => void logout()} onAccountDeleted={() => { setUser(null); setSync(LOCAL_SYNC_VIEW); setStatus("云端账号已删除；本机数据仍保留"); }} onRetrySync={() => void runSync(true)} ensureDevice={ensureDevice} onRestore={restoreCloudMatch} onNavigate={navigate} />;
     return <div className="large-empty page-shell"><span aria-hidden="true">404</span><h1>页面不存在</h1><SpaLink className="primary" href="/" navigate={navigate}>返回对局</SpaLink></div>;
@@ -2693,16 +2727,17 @@ export default function GameApp() {
   return (
     <div className="app-root">
       <a className="skip-link" href="#main-content">跳到主要内容</a>
-      <AppHeader path={path} active={!!data.activeMatch || !!data.activeEightBallMatch || !!data.activeSnookerMatch} user={user} sync={sync} theme={theme} onThemeChange={setTheme} onNavigate={navigate} />
+      <AppHeader path={path} active={hasActiveLocalMatch(data)} user={user} sync={sync} theme={theme} onThemeChange={setTheme} onNavigate={navigate} />
       <main id="main-content" tabIndex={-1}>{page}</main>
       {setupMode && <SetupDialog initialMode={setupMode} savedRules={data.savedRules} scorePresets={data.scorePresets} onClose={() => setSetupMode(null)} onStart={start} user={user} onCloudRoomCreated={enterCloudRoom} />}
       {eightSetupOpen && <EightBallSetupDialog defaultLayout={eightDefaultLayout} onClose={() => setEightSetupOpen(false)} onStart={startEight} user={user} onCloudRoomCreated={enterCloudRoom} />}
       {snookerSetupOpen && <SnookerSetupDialog onClose={() => setSnookerSetupOpen(false)} onStart={startSnooker} user={user} onCloudRoomCreated={(code, matchId, operationId) => { if (matchId && operationId) recordDirectRoomLink(matchId, operationId); enterCloudRoom(code); }} />}
-      {confirmEnd && <ConfirmDialog title="结束本场对局？" body="系统会保存最终结果、完整流水和更正记录。" onCancel={() => setConfirmEnd(false)} onConfirm={data.activeSnookerMatch ? completeSnooker : data.activeEightBallMatch ? completeEight : complete} />}
+      {teamBattleSetupOpen && <TeamBattleSetupDialog onClose={() => setTeamBattleSetupOpen(false)} onStart={startTeamBattle} />}
+      {confirmEnd && <ConfirmDialog title="结束本场对局？" body="系统会保存最终结果、完整流水和更正记录。" onCancel={() => setConfirmEnd(false)} onConfirm={data.activeTeamBattleMatch ? completeTeamBattle : data.activeSnookerMatch ? completeSnooker : data.activeEightBallMatch ? completeEight : complete} />}
       {deleteTarget && <DeleteMatchDialog
-        label={deleteTarget.kind === "snooker" ? "斯诺克" : deleteTarget.kind === "eight" ? "中八双人赛" : deleteTarget.match.mode === "cards" ? "奇招牌" : deleteTarget.match.mode === "score_cards" ? "追分 + 奇招牌" : "多人追分"}
+        label={deleteTarget.kind === "team" ? "团战记分" : deleteTarget.kind === "snooker" ? "斯诺克" : deleteTarget.kind === "eight" ? "中八双人赛" : deleteTarget.match.mode === "cards" ? "奇招牌" : deleteTarget.match.mode === "score_cards" ? "追分 + 奇招牌" : "多人追分"}
         players={deleteTarget.match.players.map((player) => player.name).join(" · ")}
-        time={deleteTarget.kind === "snooker" ? `${formatTime(deleteTarget.match.startedAt)} · ${durationLabel(snookerElapsedMs(deleteTarget.match))}` : deleteTarget.kind === "eight" ? `${formatTime(deleteTarget.match.startedAt)} · ${durationLabel(eightBallElapsedMs(deleteTarget.match))}` : `${formatTime(deleteTarget.match.startedAt)} · ${formatDuration(deleteTarget.match.startedAt, deleteTarget.match.endedAt)}`}
+        time={deleteTarget.kind === "team" ? `${formatTime(deleteTarget.match.startedAt)} · ${durationLabel(teamBattleElapsedMs(deleteTarget.match, deleteTarget.match.endedAt))}` : deleteTarget.kind === "snooker" ? `${formatTime(deleteTarget.match.startedAt)} · ${durationLabel(snookerElapsedMs(deleteTarget.match))}` : deleteTarget.kind === "eight" ? `${formatTime(deleteTarget.match.startedAt)} · ${durationLabel(eightBallElapsedMs(deleteTarget.match))}` : `${formatTime(deleteTarget.match.startedAt)} · ${formatDuration(deleteTarget.match.startedAt, deleteTarget.match.endedAt)}`}
         busy={deleting}
         error={deleteError}
         onCancel={() => { setDeleteTarget(null); setDeleteError(""); }}

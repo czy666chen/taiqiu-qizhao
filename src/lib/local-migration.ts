@@ -51,6 +51,7 @@ async function stableUuid(namespace: string, localId: string): Promise<string> {
 }
 
 function collectMatches(data: AppData): (BilliardsMatch | EightBallMatch | SnookerMatch)[] {
+  // Team battles stay in the raw local backup but never become cloud migration resources.
   const candidates = [
     data.activeMatch,
     ...data.history,

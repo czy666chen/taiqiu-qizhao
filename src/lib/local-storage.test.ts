@@ -10,9 +10,10 @@ import {
   VersionedLocalStore,
 } from "./local-storage";
 import { createSnookerMatch, recordSnookerCommand } from "./snooker";
+import { createTeamBattleMatch, finishTeamBattleMatch } from "./team-battle";
 
 describe("versioned local storage", () => {
-  it("migrates an existing v1 archive to v2 without losing legacy matches", () => {
+  it("migrates an existing v1 archive to v3 without losing legacy matches", () => {
     const existing = { ...EMPTY_APP_DATA, version: 1, scorePresets: [{ id: "friday", name: "周五", rules: [] }], activeSnookerMatch: undefined, snookerHistory: undefined };
     const adapter = new MemoryStorageAdapter({ [APP_STORAGE_KEY]: JSON.stringify(existing) });
     const store = new VersionedLocalStore(adapter);
@@ -22,6 +23,31 @@ describe("versioned local storage", () => {
 
     store.write(APP_DATA_CODEC, migrated);
     expect(JSON.parse(adapter.get(APP_STORAGE_KEY) ?? "")).toEqual(migrated);
+  });
+
+  it("migrates v2 with empty team-battle fields", () => {
+    const existing = { ...EMPTY_APP_DATA, version: 2, activeTeamBattleMatch: undefined, teamBattleHistory: undefined };
+    const store = new VersionedLocalStore(new MemoryStorageAdapter({ [APP_STORAGE_KEY]: JSON.stringify(existing) }));
+
+    expect(store.read(APP_DATA_CODEC)).toEqual({ value: EMPTY_APP_DATA });
+  });
+
+  it("restores valid team battles and isolates malformed team-battle records", () => {
+    const active = createTeamBattleMatch({ playerNames: ["甲", "乙"] }, 100);
+    const completed = finishTeamBattleMatch(active, 200);
+    const damaged = { ...completed, players: [{ ...completed.players[0], id: completed.players[1].id }, completed.players[1]] };
+    const store = new VersionedLocalStore(new MemoryStorageAdapter({
+      [APP_STORAGE_KEY]: JSON.stringify({
+        ...EMPTY_APP_DATA,
+        activeTeamBattleMatch: active,
+        teamBattleHistory: [completed, damaged],
+      }),
+    }));
+
+    const restored = store.read(APP_DATA_CODEC).value;
+    expect(restored.activeTeamBattleMatch).toMatchObject({ id: active.id, status: "active", events: [] });
+    expect(restored.teamBattleHistory).toHaveLength(1);
+    expect(restored.teamBattleHistory[0]).toMatchObject({ id: completed.id, status: "completed" });
   });
 
   it("restores a valid active snooker match and isolates a damaged snapshot", () => {

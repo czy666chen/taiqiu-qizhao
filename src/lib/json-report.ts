@@ -179,3 +179,29 @@ export function canvasJpeg(canvas: HTMLCanvasElement): PdfJpegPage {
   const data = atob(canvas.toDataURL("image/jpeg", 0.92).split(",")[1]);
   return { bytes: Uint8Array.from(data, (character) => character.charCodeAt(0)), width: canvas.width, height: canvas.height };
 }
+
+export async function renderReportPng(svg: string): Promise<Blob> {
+  const canvas = await renderReportCanvas(svg);
+  try {
+    return await new Promise<Blob>((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error("长图生成失败")), "image/png"));
+  } finally {
+    canvas.width = 1;
+    canvas.height = 1;
+  }
+}
+
+export async function renderReportPdf(svg: string): Promise<Blob> {
+  const canvas = await renderReportCanvas(svg);
+  try {
+    const pages = splitReportCanvas(canvas).map((pageCanvas) => {
+      const page = canvasJpeg(pageCanvas);
+      pageCanvas.width = 1;
+      pageCanvas.height = 1;
+      return page;
+    });
+    return new Blob([buildPdf(pages) as BlobPart], { type: "application/pdf" });
+  } finally {
+    canvas.width = 1;
+    canvas.height = 1;
+  }
+}

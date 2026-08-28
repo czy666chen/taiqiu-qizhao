@@ -3,6 +3,7 @@ import { EightBallMatch, isEightBallMatch } from "./eight-ball";
 import { getOfficialDeck } from "./official-decks";
 import { BilliardsMatch, DEFAULT_RULES, isStoredMatch, ScoreRule } from "./match";
 import { isSnookerMatch, type SnookerMatch } from "./snooker";
+import { isTeamBattleMatch, type TeamBattleMatch } from "./team-battle";
 
 export const APP_STORAGE_KEY = "billiards-club-assistant:v1";
 export const CARD_STORAGE_KEY = "billiards-trick-cards:v2";
@@ -16,7 +17,7 @@ export const DELETED_MATCHES_KEY = "billiards-deleted-matches:v1";
 export type ScorePreset = { id: string; name: string; rules: ScoreRule[] };
 
 export type AppData = {
-  version: 2;
+  version: 3;
   activeMatch: BilliardsMatch | null;
   history: BilliardsMatch[];
   savedRules: ScoreRule[];
@@ -27,12 +28,14 @@ export type AppData = {
   eightBallHistory: EightBallMatch[];
   activeSnookerMatch: SnookerMatch | null;
   snookerHistory: SnookerMatch[];
+  activeTeamBattleMatch: TeamBattleMatch | null;
+  teamBattleHistory: TeamBattleMatch[];
 };
 
 export type StorageIssue = { message: string; raw: string };
 
 export const EMPTY_APP_DATA: AppData = {
-  version: 2,
+  version: 3,
   activeMatch: null,
   history: [],
   savedRules: DEFAULT_RULES,
@@ -43,6 +46,8 @@ export const EMPTY_APP_DATA: AppData = {
   eightBallHistory: [],
   activeSnookerMatch: null,
   snookerHistory: [],
+  activeTeamBattleMatch: null,
+  teamBattleHistory: [],
 };
 
 export interface StorageAdapter {
@@ -110,9 +115,9 @@ function parseAppData(raw: string): AppData {
   if (parsed && typeof parsed === "object") {
     const data = parsed as Partial<AppData>;
     const version = (parsed as { version?: unknown }).version;
-    if ((version === 1 || version === 2) && Array.isArray(data.history)) {
+    if ((version === 1 || version === 2 || version === 3) && Array.isArray(data.history)) {
       return {
-        version: 2,
+        version: 3,
         activeMatch: isStoredMatch(data.activeMatch) ? data.activeMatch : null,
         history: data.history.filter(isStoredMatch),
         savedRules: Array.isArray(data.savedRules) ? data.savedRules : DEFAULT_RULES,
@@ -127,6 +132,10 @@ function parseAppData(raw: string): AppData {
         eightBallHistory: Array.isArray(data.eightBallHistory) ? data.eightBallHistory.filter(isEightBallMatch) : [],
         activeSnookerMatch: isSnookerMatch(data.activeSnookerMatch) ? data.activeSnookerMatch : null,
         snookerHistory: Array.isArray(data.snookerHistory) ? data.snookerHistory.filter(isSnookerMatch) : [],
+        activeTeamBattleMatch: isTeamBattleMatch(data.activeTeamBattleMatch) && data.activeTeamBattleMatch.status === "active" ? data.activeTeamBattleMatch : null,
+        teamBattleHistory: Array.isArray(data.teamBattleHistory)
+          ? data.teamBattleHistory.filter((match) => isTeamBattleMatch(match) && match.status === "completed")
+          : [],
       };
     }
   }
@@ -135,7 +144,7 @@ function parseAppData(raw: string): AppData {
 
 export const APP_DATA_CODEC: VersionedCodec<AppData> = {
   key: APP_STORAGE_KEY,
-  version: 2,
+  version: 3,
   empty: EMPTY_APP_DATA,
   decode: parseAppData,
 };
