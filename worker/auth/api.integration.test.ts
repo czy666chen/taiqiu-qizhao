@@ -287,7 +287,8 @@ describe("R3 authentication HTTP API", () => {
         "INSERT INTO score_presets (id, owner_user_id, name, rules_json) VALUES (?1, ?2, 'exported', '{}')",
       ).bind(crypto.randomUUID(), firstPayload.user.id),
       env.DB.prepare(
-        "INSERT INTO matches (id, owner_user_id, mode, status, privacy) VALUES (?1, ?2, 'score', 'active', 'participants')",
+        `INSERT INTO matches (id, owner_user_id, mode, status, privacy, snapshot_json)
+         VALUES (?1, ?2, 'snooker', 'active', 'participants', '{"mode":"snooker","framesWon":{"a":1,"b":0}}')`,
       ).bind(matchId, firstPayload.user.id),
       env.DB.prepare(
         "INSERT INTO match_players (id, match_id, seat_no, user_id, nickname_snapshot) VALUES (?1, ?2, 0, ?3, 'Owner')",
@@ -306,7 +307,7 @@ describe("R3 authentication HTTP API", () => {
       formatVersion: 1,
       profile: { id: firstPayload.user.id },
       presets: [{ name: "exported" }],
-      matches: [{ id: matchId }],
+      matches: [{ id: matchId, mode: "snooker", snapshot_json: '{"mode":"snooker","framesWon":{"a":1,"b":0}}' }],
     });
 
     const wrong = await SELF.fetch("http://example.com/api/account", {

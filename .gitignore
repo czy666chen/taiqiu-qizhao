@@ -51,7 +51,9 @@ next-env.d.ts
 /backups/
 /.tools/
 /.agents/
+/.ua/
 /.dsh/
+/.codex-dev.*.log
 /docs/
 /taiqiuqizhao/
 /*ROADMAP*.md

@@ -10,6 +10,11 @@ import {
   type RealtimeEightBallState,
 } from "./eight-ball-scoring";
 import { projectRoomCardCommand } from "./room-cards";
+import {
+  projectRealtimeSnookerCommand,
+  type RealtimeSnookerState,
+} from "./snooker-scoring";
+import { recordSnookerCommand } from "../../src/lib/snooker";
 
 export type RoomRole = "host" | "player" | "spectator";
 export type RoomPayload = JsonObject;
@@ -50,6 +55,7 @@ export type RoomSnapshot = {
   events: RoomEvent[];
   chaseScore: ChaseScoreState | null;
   eightBall: RealtimeEightBallState | null;
+  snooker: RealtimeSnookerState | null;
 };
 
 export type RoomSync = {
@@ -102,7 +108,7 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
         );
         CREATE TABLE IF NOT EXISTS room_game_state (
           singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-          mode TEXT NOT NULL CHECK (mode IN ('score', 'score_cards', 'eight_ball')),
+          mode TEXT NOT NULL CHECK (mode IN ('score', 'score_cards', 'eight_ball', 'snooker')),
           state_json TEXT NOT NULL CHECK (json_valid(state_json)),
           updated_at INTEGER NOT NULL
         );
@@ -115,7 +121,39 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
           next_retry_at INTEGER
         );
       `);
+      this.migrateGameStateSchema();
     });
+  }
+
+  private migrateGameStateSchema(): void {
+    this.ctx.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS room_schema_versions (
+        name TEXT PRIMARY KEY,
+        version INTEGER NOT NULL CHECK (version >= 1)
+      )
+    `);
+    const schema = this.ctx.storage.sql.exec<{ sql: string }>(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'room_game_state'",
+    ).toArray()[0]?.sql ?? "";
+    if (!schema.includes("'snooker'")) {
+      this.ctx.storage.transactionSync(() => {
+        this.ctx.storage.sql.exec(`
+          CREATE TABLE room_game_state_v2 (
+            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+            mode TEXT NOT NULL CHECK (mode IN ('score', 'score_cards', 'eight_ball', 'snooker')),
+            state_json TEXT NOT NULL CHECK (json_valid(state_json)),
+            updated_at INTEGER NOT NULL
+          );
+          INSERT INTO room_game_state_v2 (singleton, mode, state_json, updated_at)
+            SELECT singleton, mode, state_json, updated_at FROM room_game_state;
+          DROP TABLE room_game_state;
+          ALTER TABLE room_game_state_v2 RENAME TO room_game_state;
+        `);
+      });
+    }
+    this.ctx.storage.sql.exec(
+      "INSERT INTO room_schema_versions (name, version) VALUES ('room_game_state', 2) ON CONFLICT(name) DO UPDATE SET version = excluded.version",
+    );
   }
 
   async initialize(input: {
@@ -124,6 +162,7 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
     host: RoomMember;
     chaseScore?: ChaseScoreState;
     eightBall?: RealtimeEightBallState;
+    snooker?: RealtimeSnookerState;
   }): Promise<RoomSnapshot> {
     const existing = this.meta();
     if (existing) {
@@ -132,6 +171,7 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
       }
       if (!this.chaseScoreState() && input.chaseScore) this.persistChaseScoreState(input.chaseScore);
       if (!this.eightBallState() && input.eightBall) this.persistEightBallState(input.eightBall);
+      if (!this.snookerState() && input.snooker) this.persistSnookerState(input.snooker);
       return this.snapshot();
     }
 
@@ -149,6 +189,7 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
       );
       if (input.chaseScore) this.persistChaseScoreState(input.chaseScore);
       if (input.eightBall) this.persistEightBallState(input.eightBall);
+      if (input.snooker) this.persistSnookerState(input.snooker);
     });
     return this.snapshot();
   }
@@ -427,6 +468,33 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
       return result;
     }
 
+    const snooker = this.snookerState();
+    if (snooker) {
+      const seat = snooker.players.find((player) => player.id === input.playerId);
+      if (!seat) return { ok: false, code: "not_found", currentVersion: meta.version };
+      if (seat.userId || snooker.players.some((player) => player.userId === target.userId)) {
+        return { ok: false, code: "invalid_command", currentVersion: meta.version };
+      }
+      const players = snooker.players.map((player) => player.id === seat.id
+        ? { ...player, nickname: displayName, userId: target.userId }
+        : player) as RealtimeSnookerState["players"];
+      const match = {
+        ...snooker.match,
+        players: snooker.match.players.map((player) => player.id === seat.id ? { ...player, name: displayName } : player) as RealtimeSnookerState["match"]["players"],
+        initialPlayerNames: snooker.match.initialPlayerNames.map((name, index) => snooker.match.players[index].id === seat.id ? displayName : name) as [string, string],
+      };
+      const result = this.ctx.storage.transactionSync(() => {
+        this.persistSnookerState({ ...snooker, players, match });
+        return this.appendEvent(meta.version, input.operationId, input.actorUserId, "player.claimed", {
+          playerId: seat.id,
+          userId: target.userId,
+          nickname: displayName,
+        });
+      });
+      if (result.ok) this.broadcast({ type: "event", event: result.event, version: result.version });
+      return result;
+    }
+
     return { ok: false, code: "invalid_command", currentVersion: meta.version };
   }
 
@@ -475,6 +543,29 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
       const players = eightBall.players.map((player) => player.id === seat.id ? { ...player, nickname } : player) as RealtimeEightBallState["players"];
       const result = this.ctx.storage.transactionSync(() => {
         this.persistEightBallState({ ...eightBall, players });
+        return this.appendEvent(meta.version, input.operationId, input.actorUserId, "player.renamed", {
+          playerId: seat.id,
+          nickname,
+          previousNickname: seat.nickname,
+        });
+      });
+      if (result.ok) this.broadcast({ type: "event", event: result.event, version: result.version });
+      return result;
+    }
+
+    const snooker = this.snookerState();
+    if (snooker) {
+      const seat = snooker.players.find((player) => player.id === input.playerId);
+      if (!seat) return { ok: false, code: "not_found", currentVersion: meta.version };
+      if (seat.userId) return { ok: false, code: "forbidden", currentVersion: meta.version };
+      const players = snooker.players.map((player) => player.id === seat.id ? { ...player, nickname } : player) as RealtimeSnookerState["players"];
+      const match = {
+        ...snooker.match,
+        players: snooker.match.players.map((player) => player.id === seat.id ? { ...player, name: nickname } : player) as RealtimeSnookerState["match"]["players"],
+        initialPlayerNames: snooker.match.initialPlayerNames.map((name, index) => snooker.match.players[index].id === seat.id ? nickname : name) as [string, string],
+      };
+      const result = this.ctx.storage.transactionSync(() => {
+        this.persistSnookerState({ ...snooker, players, match });
         return this.appendEvent(meta.version, input.operationId, input.actorUserId, "player.renamed", {
           playerId: seat.id,
           nickname,
@@ -580,8 +671,9 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
     }
     const chaseScore = this.chaseScoreState();
     const eightBall = this.eightBallState();
+    const snooker = this.snookerState();
     if (input.kind.startsWith("card.")) {
-      const state = chaseScore ?? eightBall;
+      const state = chaseScore ?? eightBall ?? snooker;
       const cards = state?.cards;
       const playerId = typeof input.payload.playerId === "string" ? input.payload.playerId : undefined;
       const player = state?.players.find((item) => item.id === playerId);
@@ -597,10 +689,19 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
       return this.ctx.storage.transactionSync(() => {
         if (chaseScore) this.persistChaseScoreState({ ...chaseScore, cards: projection.cards });
         else if (eightBall) this.persistEightBallState({ ...eightBall, cards: projection.cards });
+        else if (snooker) this.persistSnookerState({ ...snooker, cards: projection.cards });
         return this.appendEvent(meta.version, input.operationId, input.actorUserId, projection.kind, projection.payload);
       });
     }
-    const projection = chaseScore
+    if (snooker && member.role !== "host") {
+      const ownedStriker = snooker.players.find((player) => player.id === snooker.match.currentFrame?.strikerId)?.userId === input.actorUserId;
+      if (!ownedStriker || (input.kind !== "snooker.pot.record" && input.kind !== "snooker.visit.end")) {
+        return { ok: false, code: "forbidden", currentVersion: meta.version };
+      }
+    }
+    const projection = snooker
+      ? projectRealtimeSnookerCommand(snooker, { kind: input.kind, payload: input.payload, now: Date.now() })
+      : chaseScore
       ? projectChaseCommand(chaseScore, this.scoringEvents(), {
           kind: input.kind,
           payload: input.payload,
@@ -618,7 +719,8 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
       return { ok: false, code: projection, currentVersion: meta.version };
     }
     return this.ctx.storage.transactionSync(() => {
-      if (projection.state.mode === "chinese_eight") this.persistEightBallState(projection.state);
+      if (projection.state.mode === "snooker") this.persistSnookerState(projection.state);
+      else if (projection.state.mode === "chinese_eight") this.persistEightBallState(projection.state);
       else this.persistChaseScoreState(projection.state);
       return this.appendEvent(meta.version, input.operationId, input.actorUserId, projection.kind, projection.payload);
     });
@@ -859,6 +961,7 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
       events: events.map((event) => this.projectEvent(this.toEvent(event), observer)),
       chaseScore: this.projectChaseScore(this.chaseScoreState(), observer) ?? null,
       eightBall: this.projectEightBall(this.eightBallState(), observer) ?? null,
+      snooker: this.projectSnooker(this.snookerState(), observer) ?? null,
     };
   }
 
@@ -1032,6 +1135,36 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
       };
     }
 
+    const snooker = this.snookerState();
+    if (snooker) {
+      const finished = snooker.match.status === "completed"
+        ? snooker.match
+        : recordSnookerCommand(snooker.match, { type: "snooker.finish" }, endedAt);
+      const cards = snooker.cards ? {
+        mode: snooker.cards.mode,
+        remaining: snooker.cards.remaining,
+        hands: snooker.cards.hands,
+        used: snooker.cards.used,
+        skipped: snooker.cards.skipped,
+        events: snooker.cards.events.map((event) => ({
+          id: event.id,
+          type: event.type,
+          handId: event.playerId,
+          ...(event.card ? { card: event.card } : {}),
+          occurredAt: event.occurredAt,
+        })),
+        initialHandSize: Math.max(0, ...Object.values(snooker.cards.initialHandSizes)),
+        initialHandSizes: snooker.cards.initialHandSizes,
+        deckSnapshot: snooker.cards.deckSnapshot,
+      } : undefined;
+      return {
+        ...finished,
+        id: typeof baseline.id === "string" ? baseline.id : snapshot.matchId,
+        ...(cards ? { cards } : {}),
+        realtimeArchive,
+      };
+    }
+
     const eightBall = snapshot.eightBall!;
     const baselinePlayers = Array.isArray(baseline.players) ? baseline.players : [];
     const stableToLocal = new Map<string, string>();
@@ -1137,6 +1270,22 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
     );
   }
 
+  private snookerState(): RealtimeSnookerState | undefined {
+    const row = this.ctx.storage.sql.exec<{ state_json: string }>(
+      "SELECT state_json FROM room_game_state WHERE singleton = 1 AND mode = 'snooker'",
+    ).toArray()[0];
+    return row ? JSON.parse(row.state_json) as RealtimeSnookerState : undefined;
+  }
+
+  private persistSnookerState(state: RealtimeSnookerState): void {
+    this.ctx.storage.sql.exec(
+      `INSERT INTO room_game_state (singleton, mode, state_json, updated_at) VALUES (1, 'snooker', ?, ?)
+       ON CONFLICT(singleton) DO UPDATE SET mode = excluded.mode, state_json = excluded.state_json, updated_at = excluded.updated_at`,
+      JSON.stringify(state),
+      Date.now(),
+    );
+  }
+
   private scoringEvents(): Array<{ sequenceNo: number; kind: string; payload: JsonObject }> {
     return this.ctx.storage.sql.exec<{ sequence_no: number; kind: string; payload_json: string }>(
       "SELECT sequence_no, kind, payload_json FROM room_events WHERE kind IN ('score.recorded', 'score.corrected') ORDER BY sequence_no",
@@ -1153,7 +1302,7 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
 
   private projectCards<T extends { cards?: ChaseScoreState["cards"]; players: Array<{ id: string; userId?: string }> }>(state: T | undefined, observer?: SnapshotObserver): T | undefined {
     if (!state?.cards) return state;
-    if (observer?.role === "host") return state;
+    if (!observer || observer.role === "host") return state;
     const visibleHands: typeof state.cards.hands = {};
     for (const player of state.players) {
       const hand = state.cards.hands[player.id] ?? [];
@@ -1167,6 +1316,10 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
   }
 
   private projectEightBall(state: RealtimeEightBallState | undefined, observer?: SnapshotObserver): RealtimeEightBallState | undefined {
+    return this.projectCards(state, observer);
+  }
+
+  private projectSnooker(state: RealtimeSnookerState | undefined, observer?: SnapshotObserver): RealtimeSnookerState | undefined {
     return this.projectCards(state, observer);
   }
 

@@ -1,9 +1,11 @@
-import { applyD1Migrations, env, runDurableObjectAlarm, SELF } from "cloudflare:test";
+import { applyD1Migrations, env, runDurableObjectAlarm, runInDurableObject, SELF } from "cloudflare:test";
 import type { D1Migration } from "@cloudflare/vitest-pool-workers";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MatchRoom, RoomPayload } from "./match-room";
 import { initializeRoomWithRetry, type RealtimeRequestContext, type RoomInitializationInput } from "./api";
 import { initRoomCards, redealRoomCards } from "./room-cards";
+import { parseDeckSnapshot } from "../../src/lib/custom-decks";
+import { createRealtimeSnookerState } from "./snooker-scoring";
 
 declare const __D1_MIGRATIONS__: D1Migration[];
 
@@ -1709,6 +1711,17 @@ describe("R4 MatchRoom Durable Object", () => {
     });
   });
 
+  it("revalidates the snooker whitelist on the server", () => {
+    const cards = initRoomCards({ game: "snooker", playerIds: ["player-1", "player-2"], handSizes: [3, 3], randomIndex: () => 0 });
+    expect(cards.deckSnapshot).toMatchObject({ game: "snooker", originalCardCount: 51, cardCount: 22, excludedForGameCount: 29 });
+    expect(() => initRoomCards({
+      game: "snooker",
+      playerIds: ["player-1", "player-2"],
+      handSizes: [1, 1],
+      deckSnapshot: { formatVersion: 2, name: "伪造牌组", cards: [{ source: "official", definitionId: "card-002", quantity: 2, supportedGames: ["chinese_eight", "snooker"] }] },
+    })).toThrow("斯诺克兼容牌不足");
+  });
+
   it("resolves an owned deck version before creating a realtime room", async () => {
     const host = await register("custom_deck_host");
     const deckId = crypto.randomUUID();
@@ -1734,7 +1747,7 @@ describe("R4 MatchRoom Durable Object", () => {
     expect(created.status).toBe(201);
     const body = await created.json() as { matchId: string };
     const stored = await env.DB.prepare("SELECT snapshot_json FROM matches WHERE id = ?1").bind(body.matchId).first<string>("snapshot_json");
-    expect(JSON.parse(stored!).cards.deckSnapshot).toEqual(snapshot);
+    expect(JSON.parse(stored!).cards.deckSnapshot).toEqual(parseDeckSnapshot(snapshot));
   });
 
   it("rejects invalid direct-create drafts and requires login", async () => {
@@ -2123,5 +2136,114 @@ describe("R4 MatchRoom Durable Object", () => {
       body: JSON.stringify({ operationId: "remove-stale", expectedVersion: 1 }),
     });
     expect(staleRemove.status).toBe(409);
+  });
+
+  it("creates, scores, deduplicates, converges, and archives a realtime snooker room", async () => {
+    const host = await register("snooker_host");
+    const created = await SELF.fetch("http://example.com/api/realtime/rooms/direct", {
+      method: "POST",
+      headers: { Cookie: host.cookie, Origin: "http://example.com", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operationId: "snooker-direct-1",
+        mode: "snooker",
+        players: [{ name: "甲" }, { name: "乙" }],
+        bestOf: 3,
+        firstStriker: 0,
+        initialReds: 6,
+        cardMode: "none",
+      }),
+    });
+    expect(created.status).toBe(201);
+    const payload = await created.json() as { matchId: string; room: { code: string }; snapshot: { snooker: { match: { initialReds: number; currentFrame: { redsRemaining: number }; players: Array<{ id: string }> } } } };
+    expect(payload.snapshot.snooker.match).toMatchObject({ initialReds: 6, currentFrame: { redsRemaining: 6 } });
+    const room = env.MATCH_ROOM.getByName(payload.matchId);
+    const playerId = payload.snapshot.snooker.match.players[0].id;
+
+    await expect(room.submitCommand({
+      operationId: "snooker-pot-1", expectedVersion: 0, actorUserId: host.userId,
+      kind: "snooker.pot.record", payload: { ball: "red" },
+    })).resolves.toMatchObject({ ok: true, duplicate: false, version: 1 });
+    await expect(room.submitCommand({
+      operationId: "snooker-pot-1", expectedVersion: 0, actorUserId: host.userId,
+      kind: "snooker.pot.record", payload: { ball: "red" },
+    })).resolves.toMatchObject({ ok: true, duplicate: true, version: 1 });
+
+    const concurrent = await Promise.all([
+      room.submitCommand({ operationId: "snooker-black-1", expectedVersion: 1, actorUserId: host.userId, kind: "snooker.pot.record", payload: { ball: "black" } }),
+      room.submitCommand({ operationId: "snooker-yellow-stale", expectedVersion: 1, actorUserId: host.userId, kind: "snooker.pot.record", payload: { ball: "yellow" } }),
+    ]);
+    expect(concurrent.filter((result) => result.ok)).toHaveLength(1);
+    expect(concurrent.filter((result) => !result.ok)).toEqual([expect.objectContaining({ code: "version_conflict", currentVersion: 2 })]);
+    await expect(room.getSnapshot()).resolves.toMatchObject({
+      version: 2,
+      chaseScore: null,
+      eightBall: null,
+      snooker: { match: { currentFrame: { scores: { [playerId]: 8 }, redsRemaining: 5, currentBreak: { points: 8 } } } },
+    });
+
+    const completed = await SELF.fetch(`http://example.com/api/realtime/rooms/${payload.room.code}/complete`, {
+      method: "POST",
+      headers: { Cookie: host.cookie, Origin: "http://example.com", "Content-Type": "application/json" },
+      body: JSON.stringify({ operationId: "snooker-complete-1", expectedVersion: 2 }),
+    });
+    expect(completed.status).toBe(200);
+    const archived = await env.DB.prepare("SELECT status, snapshot_json FROM matches WHERE id = ?1").bind(payload.matchId).first<{ status: string; snapshot_json: string }>();
+    expect(archived?.status).toBe("completed");
+    expect(JSON.parse(archived!.snapshot_json)).toMatchObject({
+      mode: "snooker",
+      status: "completed",
+      players: [{ name: "甲" }, { name: "乙" }],
+      currentFrame: { scores: { [playerId]: 8 } },
+      realtimeArchive: { roomCode: payload.room.code, version: 3 },
+    });
+  });
+
+  it("upgrades the legacy room_game_state constraint without losing its state", async () => {
+    const room = env.MATCH_ROOM.getByName(`legacy-schema-${crypto.randomUUID()}`);
+    await runInDurableObject(room, async (instance, state) => {
+      state.storage.sql.exec(`
+        DROP TABLE room_game_state;
+        CREATE TABLE room_game_state (
+          singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+          mode TEXT NOT NULL CHECK (mode IN ('score', 'score_cards', 'eight_ball')),
+          state_json TEXT NOT NULL CHECK (json_valid(state_json)),
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO room_game_state VALUES (1, 'score', '{"mode":"score"}', 1);
+      `);
+      (instance as unknown as { migrateGameStateSchema(): void }).migrateGameStateSchema();
+      expect(state.storage.sql.exec<{ mode: string; state_json: string }>("SELECT mode, state_json FROM room_game_state").toArray()).toEqual([
+        { mode: "score", state_json: '{"mode":"score"}' },
+      ]);
+      state.storage.sql.exec("UPDATE room_game_state SET mode = 'snooker', state_json = '{\"mode\":\"snooker\"}' WHERE singleton = 1");
+      expect(state.storage.sql.exec<{ mode: string }>("SELECT mode FROM room_game_state").one().mode).toBe("snooker");
+      expect(state.storage.sql.exec<{ version: number }>("SELECT version FROM room_schema_versions WHERE name = 'room_game_state'").one().version).toBe(2);
+    });
+  });
+
+  it("enforces snooker seat ownership and hides private hands from spectators", async () => {
+    const room = env.MATCH_ROOM.getByName(`snooker-permissions-${crypto.randomUUID()}`);
+    const playerIds = [crypto.randomUUID(), crypto.randomUUID()] as [string, string];
+    const cards = initRoomCards({ game: "snooker", playerIds, handSizes: [2, 2], randomIndex: () => 0 });
+    const initialized = await room.initialize({
+      matchId: crypto.randomUUID(),
+      roomCode: "SNK234",
+      host: { userId: "host-snk", nickname: "房主", role: "host", joinedAt: 1 },
+      snooker: createRealtimeSnookerState({ playerIds, playerNames: ["甲", "乙"], bestOf: 3, firstStriker: 0, now: 1, cards }),
+    });
+    expect(initialized.snooker?.cards?.hands[playerIds[0]]).toHaveLength(2);
+    await room.addMember({ operationId: "snk-join", expectedVersion: 0, userId: "user-snk", nickname: "选手甲", role: "spectator", joinedAt: 2 });
+    await expect(room.submitCommand({ operationId: "snk-viewer-pot", expectedVersion: 1, actorUserId: "user-snk", kind: "snooker.pot.record", payload: { ball: "red" } })).resolves.toMatchObject({ ok: false, code: "forbidden" });
+    await room.assignRole({ operationId: "snk-promote", expectedVersion: 1, actorUserId: "host-snk", targetUserId: "user-snk", role: "player" });
+    await room.claimSeat({ operationId: "snk-claim", expectedVersion: 2, actorUserId: "host-snk", playerId: playerIds[0], targetUserId: "user-snk" });
+    await expect(room.submitCommand({ operationId: "snk-player-pot", expectedVersion: 3, actorUserId: "user-snk", kind: "snooker.pot.record", payload: { ball: "red" } })).resolves.toMatchObject({ ok: true, version: 4 });
+    await expect(room.submitCommand({ operationId: "snk-player-referee", expectedVersion: 4, actorUserId: "user-snk", kind: "snooker.foul.record", payload: { values: [4] } })).resolves.toMatchObject({ ok: false, code: "forbidden" });
+
+    const playerView = await room.getSnapshotFor({ userId: "user-snk", role: "player" });
+    expect(playerView.snooker?.cards?.hands[playerIds[0]]).toHaveLength(2);
+    expect(playerView.snooker?.cards?.hands[playerIds[1]]).toEqual([]);
+    const spectatorView = await room.getSnapshotFor({ userId: "viewer-snk", role: "spectator" });
+    expect(spectatorView.snooker?.cards?.hands[playerIds[0]]).toEqual([]);
+    expect(spectatorView.snooker?.cards?.hands[playerIds[1]]).toEqual([]);
   });
 });

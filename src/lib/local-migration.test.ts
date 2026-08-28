@@ -9,6 +9,7 @@ import {
   VersionedLocalStore,
 } from "./local-storage";
 import { prepareLocalMigration, recordMigrationUpload, uploadLocalMigration } from "./local-migration";
+import { createSnookerMatch } from "./snooker";
 
 function localArchive() {
   const score = finishMatch(createMatch({
@@ -58,6 +59,17 @@ describe("local migration preparation", () => {
       .toEqual(first.resources.map(({ resourceId, operationId }) => ({ resourceId, operationId })));
     expect(Object.fromEntries(adapter.keys().map((key) => [key, adapter.get(key)]))).toEqual(before);
     expect(store.read(APP_DATA_CODEC).issue).toBeUndefined();
+  });
+
+  it("includes active snooker matches in cloud migration resources", async () => {
+    const snooker = createSnookerMatch({ playerNames: ["斯诺克甲", "斯诺克乙"], bestOf: 3, firstStriker: 0 }, 500);
+    const store = new VersionedLocalStore(new MemoryStorageAdapter({
+      [APP_STORAGE_KEY]: JSON.stringify({ ...EMPTY_APP_DATA, activeSnookerMatch: snooker }),
+    }));
+
+    const migration = await prepareLocalMigration(store, 1_000);
+    expect(migration.preview).toMatchObject({ players: 2, matches: 1 });
+    expect(JSON.parse(migration.resources.find(({ kind }) => kind === "match")!.snapshotJson)).toEqual(snooker);
   });
 });
 

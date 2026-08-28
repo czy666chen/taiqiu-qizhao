@@ -15,6 +15,7 @@ const eslintConfig = defineConfig([
     "dist/**",
     ".tools/**",
     ".agents/**",
+    ".ua/**",
     ".dsh/**",
     "next-env.d.ts",
   ]),

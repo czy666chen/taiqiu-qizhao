@@ -6,13 +6,28 @@ export interface CardDefinition {
   needsReview?: boolean;
   riskLevel?: "medium";
   safetyNote?: string;
+  supportedGames: SupportedGame[];
+  ruleImpact: CardRuleImpact;
 }
+
+export type SupportedGame = "chinese_eight" | "snooker";
+export type CardRuleImpact = "presentation" | "physical" | "turn" | "scoring" | "table_state";
 
 export type CardCategory = "strategy" | "social" | "physical" | "chaos";
 export type CardSafetyLevel = "low" | "medium" | "review";
 
 const SOCIAL_PATTERN = /红包|朋友圈|红牛|夸奖|问一句|掰手腕|场外选手|微信|表白/;
 const STRATEGY_PATTERN = /球权|自由球|开球权|花色球|目标球|进球袋口|黑8|移除|贴库|连杆|犯规|反弹|无效/;
+
+// 逐张人工审阅。未列入 snooker 的牌会改变球值、合法顺序、台面状态或胜负条件。
+const SNOOKER_COMPATIBLE_IDS = new Set([1, 7, 8, 9, 11, 12, 16, 17, 20, 22, 24, 25, 26, 28, 30, 35, 38, 39, 45, 47, 49]);
+const CARD_RULE_IMPACTS: Record<number, CardRuleImpact> = {
+  1:"physical",2:"scoring",3:"turn",4:"scoring",5:"table_state",6:"scoring",7:"presentation",8:"turn",9:"physical",10:"table_state",
+  11:"turn",12:"turn",13:"table_state",14:"turn",15:"table_state",16:"physical",17:"turn",18:"turn",19:"scoring",20:"physical",
+  21:"table_state",22:"physical",23:"scoring",24:"physical",25:"physical",26:"turn",27:"scoring",28:"physical",29:"scoring",30:"physical",
+  31:"table_state",32:"scoring",33:"scoring",34:"table_state",35:"turn",36:"scoring",37:"table_state",38:"physical",39:"turn",40:"turn",
+  41:"scoring",42:"table_state",43:"table_state",44:"turn",45:"physical",46:"scoring",47:"physical",48:"table_state",49:"presentation",50:"table_state",
+};
 
 export function getCardCategory(cardDefinition: CardDefinition): CardCategory {
   if (cardDefinition.safetyNote || cardDefinition.riskLevel === "medium") return "physical";
@@ -40,6 +55,8 @@ const card = (
   title,
   effect,
   count,
+  supportedGames: SNOOKER_COMPATIBLE_IDS.has(id) ? ["chinese_eight", "snooker"] : ["chinese_eight"],
+  ruleImpact: CARD_RULE_IMPACTS[id],
   ...(needsReview ? { needsReview } : {}),
   ...(riskLevel ? { riskLevel } : {}),
   ...(safetyNote ? { safetyNote } : {}),

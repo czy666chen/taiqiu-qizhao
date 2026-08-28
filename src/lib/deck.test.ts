@@ -10,7 +10,7 @@ import {
   skipCard,
 } from "./deck";
 import { CARD_DEFINITIONS } from "../data/cards";
-import { parseDeckSnapshot } from "./custom-decks";
+import { filterDeckSnapshotForGame, officialDeckSnapshot, parseDeckSnapshot } from "./custom-decks";
 
 const first = () => 0;
 
@@ -27,6 +27,25 @@ describe("卡牌核心逻辑", () => {
     expect(parseDeckSnapshot({ formatVersion: 1, name: "有效", cards: [{ source: "official", definitionId: "card-001", quantity: 1 }] })).not.toBeNull();
     expect(parseDeckSnapshot({ formatVersion: 1, name: "伪造", cards: [{ source: "official", definitionId: "card-999", quantity: 1 }] })).toBeNull();
     expect(parseDeckSnapshot({ formatVersion: 1, name: "超额", cards: [{ source: "official", definitionId: "card-001", quantity: 11 }] })).toBeNull();
+  });
+
+  it("50 张官方牌都有人工作出的玩法与影响标记", () => {
+    expect(CARD_DEFINITIONS.every((card) => card.supportedGames.includes("chinese_eight") && card.ruleImpact)).toBe(true);
+    expect(CARD_DEFINITIONS.filter((card) => card.supportedGames.includes("snooker")).map((card) => card.id)).toEqual([
+      "card-001", "card-007", "card-008", "card-009", "card-011", "card-012", "card-016", "card-017", "card-020", "card-022", "card-024", "card-025", "card-026", "card-028", "card-030", "card-035", "card-038", "card-039", "card-045", "card-047", "card-049",
+    ]);
+  });
+
+  it("斯诺克过滤器排除中八专属牌并保留数量快照", () => {
+    const filtered = filterDeckSnapshotForGame(officialDeckSnapshot(), "snooker");
+    expect(filtered).toMatchObject({ originalCount: 51, compatibleCount: 22, excludedCount: 29 });
+    expect(filtered.snapshot.cards.every((card) => card.source === "official" && card.supportedGames.includes("snooker"))).toBe(true);
+  });
+
+  it("旧版自定义牌默认不兼容斯诺克", () => {
+    const migrated = parseDeckSnapshot({ formatVersion: 1, name: "旧牌组", cards: [{ source: "custom", definitionId: "old", quantity: 1, snapshot: { title: "旧牌", effect: "旧效果", safetyLevel: "low" } }] });
+    expect(migrated?.formatVersion).toBe(2);
+    expect(filterDeckSnapshotForGame(migrated!, "snooker").compatibleCount).toBe(0);
   });
 
   it("无懈可击有两个不同实例和显示编号", () => {

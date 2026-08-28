@@ -5,7 +5,7 @@ import AdminApp from "./AdminApp";
 import { CARD_DEFINITIONS, CardCategory } from "../src/data/cards";
 import { getOfficialDeck, officialDeckCardCount, OfficialDeckId } from "../src/lib/official-decks";
 import type { DeckSnapshot } from "../src/lib/custom-decks";
-import { buildPdf, canvasJpeg, parseMatchReport, renderReportCanvas, splitReportCanvas } from "../src/lib/json-report";
+import { buildPdf, buildSnookerReport, canvasJpeg, parseMatchReport, renderReportCanvas, splitReportCanvas } from "../src/lib/json-report";
 import {
   addMatchPlayer,
   applyBlackGoldScore,
@@ -96,6 +96,9 @@ import {
 } from "../src/lib/cloud-sync";
 import { reconcileCloudMatches, type CloudMatchSnapshot } from "../src/lib/cloud-reconcile";
 import { createRealtimeCardNotice, type RealtimeCardNotice } from "../src/lib/realtime-card-notice";
+import { createSnookerMatch, getSnookerBreakStats, getSnookerScoreSituation, isSnookerMatch, recordSnookerCommand, SNOOKER_BALL_VALUES, type SnookerBall, type SnookerDraft, type SnookerMatch } from "../src/lib/snooker";
+import { SnookerBoard, SnookerHistoryDetail, SnookerSetupDialog, snookerElapsedMs } from "./SnookerFeature";
+import { useModalDialog } from "./useModalDialog";
 
 const APP_VERSION = "5.3.1";
 
@@ -208,7 +211,7 @@ function AppHeader({ path, active, user, sync, theme, onThemeChange, onNavigate 
   );
 }
 
-function EmptyHome({ onStart, onStartEight, onNavigate, onResume, recent, paused, user, onEnterCloudRoom }: { onStart: (mode: MatchMode) => void; onStartEight: () => void; onNavigate: (path: string) => void; onResume: (id: string) => void; recent?: BilliardsMatch; paused: BilliardsMatch[]; user: AuthUser | null; onEnterCloudRoom: (code: string) => void }) {
+function EmptyHome({ onStart, onStartEight, onStartSnooker, onNavigate, onResume, recent, paused, user, onEnterCloudRoom }: { onStart: (mode: MatchMode) => void; onStartEight: () => void; onStartSnooker: () => void; onNavigate: (path: string) => void; onResume: (id: string) => void; recent?: BilliardsMatch; paused: BilliardsMatch[]; user: AuthUser | null; onEnterCloudRoom: (code: string) => void }) {
   const [cloudRooms, setCloudRooms] = useState<CloudRoomRow[]>([]);
   const [cloudRoomsError, setCloudRoomsError] = useState("");
   const loadCloudRooms = async () => {
@@ -229,26 +232,32 @@ function EmptyHome({ onStart, onStartEight, onNavigate, onResume, recent, paused
   return (
     <div className="home-page page-shell">
       <section className="welcome-panel">
-        <div>
-          <p className="kicker">CHINESE BILLIARDS · MATCH NIGHT</p>
-          <h1>今晚这桌，<br /><em>玩点不一样。</em></h1>
-          <p className="lead">追分、抽牌、记流水，一部手机就能管好整场朋友局。</p>
+        <div className="welcome-copy">
+          <p className="kicker">MATCH NIGHT · TABLE 08</p>
+          <h1>朋友到齐，<br /><em>这局就开。</em></h1>
+          <p className="lead">中八、斯诺克、多人追分和奇招牌，一部手机记清比分、单杆与整晚战绩。</p>
           <dl className="hero-proof" aria-label="产品能力">
-            <div><dt>2–8</dt><dd>朋友同桌</dd></div>
+            <div><dt>4 种</dt><dd>朋友局玩法</dd></div>
             <div><dt>51</dt><dd>张奇招牌</dd></div>
-            <div><dt>0</dt><dd>登录也能开局</dd></div>
+            <div><dt>离线</dt><dd>照样完整记局</dd></div>
           </dl>
           <div className="welcome-actions">
-            <button className="primary" onClick={onStartEight}>开始中八比赛 <span>→</span></button>
-            <button className="secondary" onClick={() => onStart("score")}>开始追分局</button>
+            <button className="primary" onClick={onStartEight}>开始中八比赛 <span aria-hidden="true">→</span></button>
+            <SpaLink className="hero-text-link" href="/play" navigate={onNavigate}>先看看所有玩法 <span aria-hidden="true">↗</span></SpaLink>
           </div>
         </div>
-        <div className="feature-orbit" aria-hidden="true">
-          <div className="orbit-ring ring-a" /><div className="orbit-ring ring-b" />
-          <span className="table-mark">TABLE 08 · READY</span>
-          <span className="hero-ball">8</span>
-          <div className="float-card card-one"><small>NO. 016</small><b>纷乱头脑</b><span>安全挑战</span></div>
-          <div className="float-card card-two"><small>LIVE SCORE</small><b>+ 20</b><span>小金</span></div>
+        <div className="match-table-preview" aria-label="朋友局计分台示意图">
+          <header><span><i /> 现场计分</span><b>第 6 局</b></header>
+          <div className="table-score">
+            <div><small>小夫</small><strong>4</strong><span>开球</span></div>
+            <em>:</em>
+            <div><small>儿子</small><strong>3</strong><span>目标 7</span></div>
+          </div>
+          <div className="felt-table" aria-hidden="true">
+            <i className="pocket p1" /><i className="pocket p2" /><i className="pocket p3" /><i className="pocket p4" /><i className="pocket p5" /><i className="pocket p6" />
+            <span className="cue-line" /><span className="table-ball cue" /><span className="table-ball eight">8</span><span className="table-ball red" /><span className="table-ball stripe" />
+          </div>
+          <footer><span>本机自动保存</span><b>最近操作：小夫 +1 局</b></footer>
         </div>
       </section>
 
@@ -271,10 +280,14 @@ function EmptyHome({ onStart, onStartEight, onNavigate, onResume, recent, paused
       )}
       {user && cloudRoomsError && <p className="cloud-rooms-note" role="status">{cloudRoomsError}</p>}
 
-      <section className="quick-grid" aria-label="快速开始">
-        <button onClick={onStartEight}><span className="quick-icon red">8</span><div><b>中八双人计分板</b><small>抢 N / 自由局 · 逐局流水</small></div><i>→</i></button>
-        <button onClick={() => onStart("score")}><span className="quick-icon mint">＋</span><div><b>多人追分</b><small>2–8 人 · 分值可配 · 自动排名</small></div><i>→</i></button>
-        <SpaLink href="/room" navigate={onNavigate}><span className="quick-icon gold">⇄</span><div><b>多人实时房间</b><small>云端实时 · 房间码加入 · 全屏对局</small></div><i>→</i></SpaLink>
+      <section className="quick-start" aria-labelledby="quick-start-title">
+        <header className="quick-start-heading"><div><p className="kicker">CHOOSE YOUR GAME</p><h2 id="quick-start-title">今晚玩什么</h2></div><p>先选规则，再邀请球友。每种玩法都保留完整流水。</p></header>
+        <div className="quick-grid">
+          <button className="quick-card quick-eight" onClick={onStartEight}><span className="quick-index">01</span><span className="quick-icon red" aria-hidden="true">8</span><div><b>中八双人赛</b><small>抢 N 或自由局，逐局记录胜负与犯规</small></div><i aria-hidden="true">↗</i></button>
+          <button className="quick-card quick-snooker" onClick={onStartSnooker}><span className="quick-index">02</span><span className="quick-icon snooker" aria-hidden="true">15</span><div><b>标准斯诺克</b><small>15 红、单杆统计与多局赛制</small></div><i aria-hidden="true">↗</i></button>
+          <button className="quick-card quick-score" onClick={() => onStart("score")}><span className="quick-index">03</span><span className="quick-icon mint" aria-hidden="true">＋</span><div><b>多人追分</b><small>2–8 人同桌，分值与轮转规则都能改</small></div><i aria-hidden="true">↗</i></button>
+          <SpaLink className="quick-card quick-room" href="/room" navigate={onNavigate}><span className="quick-index">04</span><span className="quick-icon gold" aria-hidden="true">⇄</span><div><b>多人实时房间</b><small>用房间码邀请球友，多部手机同步操作</small></div><i aria-hidden="true">↗</i></SpaLink>
+        </div>
       </section>
 
       {recent && (
@@ -295,7 +308,7 @@ function ScoreValueInput({ rule, onValueChange }: { rule: ScoreRule; onValueChan
 function NonNegativeNumberInput({ ariaLabel, value, max, onValueChange }: { ariaLabel: string; value: number; max?: number; onValueChange: (value: number) => void }) {
   const [draftValue, setDraftValue] = useState(String(value));
 
-  return <input aria-label={ariaLabel} type="number" min="0" max={max} inputMode="numeric" value={draftValue} onChange={(event) => {
+  return <input name={ariaLabel} autoComplete="off" aria-label={ariaLabel} type="number" min="0" max={max} inputMode="numeric" value={draftValue} onChange={(event) => {
     const next = event.target.value;
     setDraftValue(next);
     if (next !== "" && Number.isFinite(Number(next))) onValueChange(Number(next));
@@ -308,6 +321,7 @@ function NonNegativeNumberInput({ ariaLabel, value, max, onValueChange }: { aria
 }
 
 function SetupDialog({ initialMode, savedRules, scorePresets, onClose, onStart, user, onCloudRoomCreated }: { initialMode: MatchMode; savedRules: ScoreRule[]; scorePresets: ScorePreset[]; onClose: () => void; onStart: (draft: MatchDraft, presets: ScorePreset[]) => void; user: AuthUser | null; onCloudRoomCreated: (code: string) => void }) {
+  const dialogRef = useModalDialog(onClose);
   const [names, setNames] = useState(["玩家 A", "玩家 B"]);
   const [initialScore, setInitialScore] = useState(0);
   const [playerScores, setPlayerScores] = useState([0, 0]);
@@ -335,6 +349,7 @@ function SetupDialog({ initialMode, savedRules, scorePresets, onClose, onStart, 
   const [hostMode, setHostMode] = useState<"local" | "cloud">("local");
   const [cloudBusy, setCloudBusy] = useState(false);
   const [cloudError, setCloudError] = useState("");
+  const [presetDeletePending, setPresetDeletePending] = useState(false);
   const selectedCustomPreset = presets.find((preset) => preset.id === selectedPresetId);
   const scoreEnabled = initialMode !== "cards";
   const selectedDeck = getOfficialDeck(deckId);
@@ -394,6 +409,7 @@ function SetupDialog({ initialMode, savedRules, scorePresets, onClose, onStart, 
     setPresetName("");
     setRules(DEFAULT_RULES.map((rule) => ({ ...rule })));
     setSelectedPresetId(DEFAULT_SCORE_PRESET_ID);
+    setPresetDeletePending(false);
   };
   const submit = () => {
     const nextPresets = savePreset && presetName.trim()
@@ -452,8 +468,8 @@ function SetupDialog({ initialMode, savedRules, scorePresets, onClose, onStart, 
   };
 
   return (
-    <div className="modal-backdrop">
-      <section className="setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-title">
+    <>
+      <dialog ref={dialogRef} className="setup-modal" aria-labelledby="setup-title" onCancel={(event) => { event.preventDefault(); onClose(); }}>
         <header className="modal-heading">
           <div><p className="kicker">NEW MATCH</p><h2 id="setup-title">{reviewing ? "确认本局规则" : initialMode === "cards" ? "开始奇招牌局" : "创建追分对局"}</h2></div>
           <button className="icon-button" onClick={onClose} aria-label="关闭">×</button>
@@ -472,7 +488,7 @@ function SetupDialog({ initialMode, savedRules, scorePresets, onClose, onStart, 
               <div className="setup-title"><span>01</span><div><b>添加玩家</b><small>支持 2–8 名临时玩家，无需注册</small></div></div>
               <div className="player-inputs">
                 {names.map((name, index) => (
-                  <label key={index} className="player-input"><span>{index + 1}</span><input className="player-name-input" aria-label={`玩家 ${index + 1} 昵称`} value={name} maxLength={12} onChange={(event) => updateName(index, event.target.value)} /><input className="player-score-input" aria-label={`${name || `玩家 ${index + 1}`}初始积分`} type="number" inputMode="numeric" value={playerScores[index] ?? initialScore} onChange={(event) => updatePlayerScore(index, Number(event.target.value))} />{names.length > 2 && <button onClick={() => { setNames(names.filter((_, itemIndex) => itemIndex !== index)); setPlayerScores(playerScores.filter((_, itemIndex) => itemIndex !== index)); }} aria-label={`删除玩家 ${index + 1}`}>×</button>}</label>
+                  <label key={index} className="player-input"><span>{index + 1}</span><input name={`player-${index + 1}-name`} autoComplete="off" className="player-name-input" aria-label={`玩家 ${index + 1} 昵称`} value={name} maxLength={12} onChange={(event) => updateName(index, event.target.value)} /><input name={`player-${index + 1}-initial-score`} autoComplete="off" className="player-score-input" aria-label={`${name || `玩家 ${index + 1}`}初始积分`} type="number" inputMode="numeric" value={playerScores[index] ?? initialScore} onChange={(event) => updatePlayerScore(index, Number(event.target.value))} />{names.length > 2 && <button onClick={() => { setNames(names.filter((_, itemIndex) => itemIndex !== index)); setPlayerScores(playerScores.filter((_, itemIndex) => itemIndex !== index)); }} aria-label={`删除玩家 ${index + 1}`}>×</button>}</label>
                 ))}
                 {names.length < 8 && <button className="add-player" onClick={() => { setNames([...names, `玩家 ${String.fromCharCode(65 + names.length)}`]); setPlayerScores([...playerScores, initialScore]); }}>＋ 添加临时玩家</button>}
                 <button className="add-player" onClick={shufflePlayers}>＋ 随机排列顺序</button>
@@ -483,21 +499,21 @@ function SetupDialog({ initialMode, savedRules, scorePresets, onClose, onStart, 
             {scoreEnabled && (
               <section className="setup-section">
                 <div className="setup-title"><span>02</span><div><b>计分规则</b><small>所有分值都可修改</small></div></div>
-                <label className="initial-score"><span>统一设置初始积分</span><input type="number" inputMode="numeric" value={initialScore} onChange={(event) => { const value = Number(event.target.value); setInitialScore(value); setPlayerScores(playerScores.map(() => value)); }} /><small>可在玩家姓名右侧单独调整</small></label>
+                <label className="initial-score"><span>统一设置初始积分</span><input name="initial-score" autoComplete="off" type="number" inputMode="numeric" value={initialScore} onChange={(event) => { const value = Number(event.target.value); setInitialScore(value); setPlayerScores(playerScores.map(() => value)); }} /><small>可在玩家姓名右侧单独调整</small></label>
                 <div className="turn-strategy"><span>击球顺序</span><div className="segmented"><button className={turnStrategy === "fixed" ? "active" : ""} onClick={() => setTurnStrategy("fixed")}>固定轮转</button><button className={turnStrategy === "winner_stays" ? "active" : ""} onClick={() => setTurnStrategy("winner_stays")}>得分者继续</button></div></div>
-                <div className="preset-manager"><select aria-label="计分预设" value={selectedPresetId} onChange={(event) => loadPreset(event.target.value)}><option value={DEFAULT_SCORE_PRESET_ID}>14710 标准（默认）</option><option value="">上次使用规则</option>{presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select><button type="button" disabled={!selectedCustomPreset} onClick={copyPreset}>复制</button><button type="button" disabled={!selectedCustomPreset} onClick={deletePreset}>删除</button></div>
+                <div className="preset-manager"><select aria-label="计分预设" value={selectedPresetId} onChange={(event) => loadPreset(event.target.value)}><option value={DEFAULT_SCORE_PRESET_ID}>14710 标准（默认）</option><option value="">上次使用规则</option>{presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}</select><button type="button" disabled={!selectedCustomPreset} onClick={copyPreset}>复制</button><button type="button" disabled={!selectedCustomPreset} onClick={() => setPresetDeletePending(true)}>删除</button></div>
                 <div className="rule-editor">
                   {rules.map((rule) => (
                     <label key={rule.id} className={!rule.enabled ? "disabled" : ""}>
-                      <input type="checkbox" checked={rule.enabled} onChange={(event) => updateRule(rule.id, { enabled: event.target.checked })} />
-                      <span className={`rule-dot ${rule.color}`} /><input className="rule-name-input" aria-label={`${rule.label}名称`} value={rule.label} maxLength={12} onChange={(event) => updateRule(rule.id, { label: event.target.value })} /><select aria-label={`${rule.label}颜色`} value={rule.color} onChange={(event) => updateRule(rule.id, { color: event.target.value })}><option value="mint">绿色</option><option value="cyan">青色</option><option value="gold">金色</option><option value="violet">紫色</option><option value="red">红色</option></select><select aria-label={`${rule.label}类型`} value={rule.kind} onChange={(event) => updateRule(rule.id, { kind: event.target.value as "gain" | "penalty" })}><option value="gain">得分</option><option value="penalty">扣分</option></select>
+                      <input name={`rule-${rule.id}-enabled`} autoComplete="off" type="checkbox" checked={rule.enabled} onChange={(event) => updateRule(rule.id, { enabled: event.target.checked })} />
+                      <span className={`rule-dot ${rule.color}`} aria-hidden="true" /><input name={`rule-${rule.id}-name`} autoComplete="off" className="rule-name-input" aria-label={`${rule.label}名称`} value={rule.label} maxLength={12} onChange={(event) => updateRule(rule.id, { label: event.target.value })} /><select aria-label={`${rule.label}颜色`} value={rule.color} onChange={(event) => updateRule(rule.id, { color: event.target.value })}><option value="mint">绿色</option><option value="cyan">青色</option><option value="gold">金色</option><option value="violet">紫色</option><option value="red">红色</option></select><select aria-label={`${rule.label}类型`} value={rule.kind} onChange={(event) => updateRule(rule.id, { kind: event.target.value as "gain" | "penalty" })}><option value="gain">得分</option><option value="penalty">扣分</option></select>
                       <ScoreValueInput key={`${selectedPresetId}-${rule.id}`} rule={rule} onValueChange={(value) => updateRule(rule.id, { value })} />
-                      <input className="rule-description-input" aria-label={`${rule.label}说明`} placeholder="例如：第三局翻中袋…" value={rule.description ?? ""} maxLength={40} onChange={(event) => updateRule(rule.id, { description: event.target.value })} /><span className="rule-order"><button type="button" aria-label={`${rule.label}上移`} onClick={() => moveRule(rule.id, -1)}>↑</button><button type="button" aria-label={`${rule.label}下移`} onClick={() => moveRule(rule.id, 1)}>↓</button>{rule.custom && <button type="button" onClick={() => setRules(rules.filter((item) => item.id !== rule.id))}>删除</button>}</span>
+                      <input name={`rule-${rule.id}-description`} autoComplete="off" className="rule-description-input" aria-label={`${rule.label}说明`} placeholder="例如：第三局翻中袋…" value={rule.description ?? ""} maxLength={40} onChange={(event) => updateRule(rule.id, { description: event.target.value })} /><span className="rule-order"><button type="button" aria-label={`${rule.label}上移`} onClick={() => moveRule(rule.id, -1)}>↑</button><button type="button" aria-label={`${rule.label}下移`} onClick={() => moveRule(rule.id, 1)}>↓</button>{rule.custom && <button type="button" onClick={() => setRules(rules.filter((item) => item.id !== rule.id))}>删除</button>}</span>
                     </label>
                   ))}
                 </div>
                 <button className="add-player add-score-rule" type="button" onClick={addCustomRule}>＋ 添加自定义计分项</button>
-                <div className="save-preset"><label><input type="checkbox" checked={savePreset} onChange={(event) => setSavePreset(event.target.checked)} /> {selectedCustomPreset ? "保存对当前预设的编辑" : "另存为命名预设"}</label>{savePreset && <input aria-label="计分预设名称" maxLength={24} placeholder="例如：周五俱乐部规则…" value={presetName} onChange={(event) => setPresetName(event.target.value)} />}</div>
+                <div className="save-preset"><label><input name="save-score-preset" type="checkbox" checked={savePreset} onChange={(event) => setSavePreset(event.target.checked)} /> {selectedCustomPreset ? "保存对当前预设的编辑" : "另存为命名预设"}</label>{savePreset && <input name="score-preset-name" autoComplete="off" aria-label="计分预设名称" maxLength={24} placeholder="例如：周五俱乐部规则…" value={presetName} onChange={(event) => setPresetName(event.target.value)} />}</div>
               </section>
             )}
 
@@ -528,8 +544,9 @@ function SetupDialog({ initialMode, savedRules, scorePresets, onClose, onStart, 
           )}
         </footer>
         {hostMode === "cloud" && <p className="form-message" role="status">{cloudError || (user ? "确认后将直接创建云端实时房间并取得房间码。" : "登录后可用云端实时房间；游客仍可使用本机计分。")}</p>}
-      </section>
-    </div>
+      </dialog>
+      {presetDeletePending && selectedCustomPreset && <ConfirmDialog title="删除计分预设？" body={`“${selectedCustomPreset.name}”将从本机预设中移除。`} cancelLabel="保留预设" confirmLabel="确认删除" onCancel={() => setPresetDeletePending(false)} onConfirm={deletePreset} />}
+    </>
   );
 }
 
@@ -573,7 +590,7 @@ function ScoreBoard({ match, onScore, onTransfer, onBackfill, onBlackGold, onHan
             <button key={rule.id} className={rule.color} onClick={() => { onScore(rule.id, selectedId, scoreNote); setScoreNote(""); setManualSelectedId(null); }}><span>{rule.kind === "penalty" ? "−" : "+"}{rule.value}</span><b>{rule.label}</b></button>
           ))}
         </div>
-        <label className="score-note"><span>本笔备注</span><input aria-label="下一笔计分备注" maxLength={80} placeholder="例如：第三局翻中袋…" value={scoreNote} onChange={(event) => setScoreNote(event.target.value)} /></label>
+        <label className="score-note"><span>本笔备注</span><input name="score-note" autoComplete="off" aria-label="下一笔计分备注" maxLength={80} placeholder="例如：第三局翻中袋…" value={scoreNote} onChange={(event) => setScoreNote(event.target.value)} /></label>
         <div className="transfer-entry"><button className="text-button" onClick={() => setTransferOpen(!transferOpen)}>⇄ {transferOpen ? "收起转账计分" : "转账计分"}</button>{transferOpen && <div className="transfer-panel"><header><b>获胜者：{match.players.find((player) => player.id === selectedId)?.name}</b><small>每名所选输家支付同样分数，总分保持不变</small></header><div className="transfer-losers">{rankings.filter((player) => player.id !== selectedId).map((player) => <label key={player.id}><input type="checkbox" checked={transferLosers.includes(player.id)} onChange={(event) => setTransferLosers(event.target.checked ? [...transferLosers, player.id] : transferLosers.filter((id) => id !== player.id))} />{player.name}</label>)}</div><div className="transfer-fields"><label><span>每人支付</span><input aria-label="每名输家支付分数" type="number" min="1" inputMode="numeric" value={transferAmount} onChange={(event) => setTransferAmount(Number(event.target.value))} /></label><label><span>备注</span><input aria-label="转账计分备注" maxLength={80} placeholder="例如：第三局结算…" value={transferNote} onChange={(event) => setTransferNote(event.target.value)} /></label><button disabled={!transferLosers.length || transferAmount <= 0} onClick={() => { onTransfer(selectedId, transferLosers, transferAmount, transferNote); setTransferLosers([]); setTransferNote(""); setManualSelectedId(null); setTransferOpen(false); }}>确认转账</button></div></div>}</div>
         <div className="transfer-entry"><button className="text-button" onClick={() => setBackfillOpen(!backfillOpen)}>＋ {backfillOpen ? "收起补录" : "补录计分事件"}</button>{backfillOpen && <div className="backfill-panel"><label><span>原因</span><input aria-label="补录原因" maxLength={30} placeholder="例如：漏记犯规…" value={backfillLabel} onChange={(event) => setBackfillLabel(event.target.value)} /></label><label><span>分值（可负数）</span><input aria-label="补录分值" type="number" inputMode="numeric" value={backfillDelta} onChange={(event) => setBackfillDelta(Number(event.target.value))} /></label><label><span>备注</span><input aria-label="补录备注" maxLength={80} placeholder="例如：依据纸质记录补录…" value={backfillNote} onChange={(event) => setBackfillNote(event.target.value)} /></label><button disabled={!backfillLabel.trim() || backfillDelta === 0} onClick={() => { onBackfill(selectedId, backfillDelta, backfillLabel, backfillNote); setBackfillDelta(0); setBackfillLabel(""); setBackfillNote(""); setBackfillOpen(false); }}>确认补录</button></div>}</div>
         <div className="transfer-entry"><button className="text-button" onClick={() => setSpecialOpen(!specialOpen)}>◆ {specialOpen ? "收起特殊规则" : "黑金 / 让杆"}</button>{specialOpen && <div className="special-score-panel"><label><span>基础分</span><input aria-label="特殊规则基础分" type="number" min="1" inputMode="numeric" value={specialAmount} onChange={(event) => setSpecialAmount(Number(event.target.value))} /></label><label><span>让分方</span><select aria-label="让杆让分方" value={handicapGrantorId} onChange={(event) => setHandicapGrantorId(event.target.value)}><option value="">请选择</option>{rankings.filter((player) => player.id !== selectedId).map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></label><label><span>备注</span><input aria-label="特殊规则备注" maxLength={80} placeholder="例如：赛前约定…" value={specialNote} onChange={(event) => setSpecialNote(event.target.value)} /></label><button disabled={specialAmount <= 0} onClick={() => { onBlackGold(selectedId, specialAmount, specialNote); setSpecialNote(""); setSpecialOpen(false); }}>黑金结算（每家 ×2）</button><button disabled={specialAmount <= 0 || !handicapGrantorId} onClick={() => { onHandicap(selectedId, handicapGrantorId, specialAmount, specialNote); setSpecialNote(""); setHandicapGrantorId(""); setSpecialOpen(false); }}>记录让杆</button></div>}</div>
@@ -658,7 +675,7 @@ function PlayerManager({ match, onChange, toast }: { match: BilliardsMatch; onCh
     setName("");
     toast("已添加中途加入玩家；独立手牌模式下从空手牌开始");
   };
-  return <section className="player-manager" aria-label="玩家管理"><header><div><p className="kicker">PLAYER CONTROL</p><h2>玩家与击球顺序</h2></div><div className="segmented strategy-switch"><button className={(match.turnStrategy ?? "fixed") === "fixed" ? "active" : ""} onClick={() => onChange({ ...match, turnStrategy: "fixed" })}>固定轮转</button><button className={match.turnStrategy === "winner_stays" ? "active" : ""} onClick={() => onChange({ ...match, turnStrategy: "winner_stays" })}>得分者继续</button></div></header><div className="manager-list">{activePlayers.map((player, index) => { const activity = hasPlayerActivity(match, player.id); return <article key={player.id} className={player.id === match.currentPlayerId ? "current" : ""}><span className="manager-order">{index + 1}</span><div><b>{player.name}</b><small>{player.id === match.currentPlayerId ? "当前击球" : `加入 ${formatTime(player.joinedAt ?? match.startedAt)}`} · {player.score} 分</small></div><div className="manager-actions"><button disabled={index === 0} onClick={() => move(player.id, -1)} aria-label={`${player.name}上移`}>↑</button><button disabled={index === activePlayers.length - 1} onClick={() => move(player.id, 1)} aria-label={`${player.name}下移`}>↓</button><button className="current-button" disabled={player.id === match.currentPlayerId} onClick={() => onChange(setCurrentPlayer(match, player.id))}>设为当前</button>{activity ? <button className="leave-button" disabled={activePlayers.length <= 2} onClick={() => { onChange(leaveMatchPlayer(match, player.id)); toast(`${player.name} 已离场，历史和最终分数已保留`); }}>离场</button> : <button className="leave-button" disabled={activePlayers.length <= 2} onClick={() => { onChange(deleteMatchPlayer(match, player.id)); toast(`${player.name} 尚无流水，已安全移除`); }}>移除</button>}</div></article>; })}</div>{!!departedPlayers.length && <details className="departed-list"><summary>已离场玩家 <span>{departedPlayers.length}</span></summary>{departedPlayers.map((player) => <div key={player.id}><b>{player.name}</b><small>{player.score} 分 · {player.leftAt ? formatTime(player.leftAt) : "已离场"}</small></div>)}</details>}<div className="mid-match-add"><input aria-label="中途加入玩家昵称" placeholder="例如：小王…" maxLength={12} value={name} onChange={(event) => setName(event.target.value)} />{match.mode !== "cards" && <input aria-label="中途加入玩家初始积分" type="number" inputMode="numeric" value={initialScore} onChange={(event) => setInitialScore(Number(event.target.value))} />}<button disabled={!name.trim() || activePlayers.length >= 8} onClick={add}>＋ 中途加入</button></div></section>;
+  return <section className="player-manager" aria-label="玩家管理"><header><div><p className="kicker">PLAYER CONTROL</p><h2>玩家与击球顺序</h2></div><div className="segmented strategy-switch"><button className={(match.turnStrategy ?? "fixed") === "fixed" ? "active" : ""} onClick={() => onChange({ ...match, turnStrategy: "fixed" })}>固定轮转</button><button className={match.turnStrategy === "winner_stays" ? "active" : ""} onClick={() => onChange({ ...match, turnStrategy: "winner_stays" })}>得分者继续</button></div></header><div className="manager-list">{activePlayers.map((player, index) => { const activity = hasPlayerActivity(match, player.id); return <article key={player.id} className={player.id === match.currentPlayerId ? "current" : ""}><span className="manager-order">{index + 1}</span><div><b>{player.name}</b><small>{player.id === match.currentPlayerId ? "当前击球" : `加入 ${formatTime(player.joinedAt ?? match.startedAt)}`} · {player.score} 分</small></div><div className="manager-actions"><button disabled={index === 0} onClick={() => move(player.id, -1)} aria-label={`${player.name}上移`}>↑</button><button disabled={index === activePlayers.length - 1} onClick={() => move(player.id, 1)} aria-label={`${player.name}下移`}>↓</button><button className="current-button" disabled={player.id === match.currentPlayerId} onClick={() => onChange(setCurrentPlayer(match, player.id))}>设为当前</button>{activity ? <button className="leave-button" disabled={activePlayers.length <= 2} onClick={() => { onChange(leaveMatchPlayer(match, player.id)); toast(`${player.name} 已离场，历史和最终分数已保留`); }}>离场</button> : <button className="leave-button" disabled={activePlayers.length <= 2} onClick={() => { onChange(deleteMatchPlayer(match, player.id)); toast(`${player.name} 尚无流水，已安全移除`); }}>移除</button>}</div></article>; })}</div>{!!departedPlayers.length && <details className="departed-list"><summary>已离场玩家 <span>{departedPlayers.length}</span></summary>{departedPlayers.map((player) => <div key={player.id}><b>{player.name}</b><small>{player.score} 分 · {player.leftAt ? formatTime(player.leftAt) : "已离场"}</small></div>)}</details>}<div className="mid-match-add"><input name="mid-match-player-name" autoComplete="off" aria-label="中途加入玩家昵称" placeholder="例如：小王…" maxLength={12} value={name} onChange={(event) => setName(event.target.value)} />{match.mode !== "cards" && <input name="mid-match-player-score" autoComplete="off" aria-label="中途加入玩家初始积分" type="number" inputMode="numeric" value={initialScore} onChange={(event) => setInitialScore(Number(event.target.value))} />}<button disabled={!name.trim() || activePlayers.length >= 8} onClick={add}>＋ 中途加入</button></div></section>;
 }
 
 function ActiveMatchView({ match, readOnly = false, onChange, onFinish, toast }: { match: BilliardsMatch; readOnly?: boolean; onChange: (match: BilliardsMatch) => void; onFinish: () => void; toast: (message: string) => void }) {
@@ -681,15 +698,16 @@ function ActiveMatchView({ match, readOnly = false, onChange, onFinish, toast }:
   );
 }
 
-function PlayPage({ onStart, onStartEight }: { onStart: (mode: MatchMode) => void; onStartEight: () => void }) {
+function PlayPage({ onStart, onStartEight, onStartSnooker }: { onStart: (mode: MatchMode) => void; onStartEight: () => void; onStartSnooker: () => void }) {
   return <div className="content-page page-shell"><header className="page-title"><p className="kicker">PLAY MODES</p><h1>今天想怎么玩？</h1><p>从轻松抽牌到完整追分，每种玩法都能独立开始，也能自由组合。</p></header><div className="mode-grid">
     <article className="mode-card featured"><span className="mode-number">00</span><div className="mode-symbol score">8</div><p className="kicker">CHINESE EIGHT</p><h2>中八双人赛</h2><p>红蓝二等分计分板，记录普胜、炸清、接清、犯规和逐局可追溯流水。</p><ul><li>2 人</li><li>抢 N / 自由局</li><li>离线可用</li></ul><div><button className="primary" onClick={onStartEight}>开始中八设置 <span>→</span></button></div></article>
+    <article className="mode-card"><span className="mode-number">SN</span><div className="mode-symbol snooker">15</div><p className="kicker">SNOOKER</p><h2>标准斯诺克</h2><p>默认标准 15 红，逐球记录红彩顺序、局分、当前单杆与 30+，刷新后完整恢复。</p><ul><li>2 人</li><li>标准 15 红</li><li>离线可用</li></ul><div><button className="primary" onClick={onStartSnooker}>开始标准斯诺克 <span>→</span></button></div></article>
     <article className="mode-card"><span className="mode-number">01</span><div className="mode-symbol score">＋</div><p className="kicker">SCORE CHASE</p><h2>多人追分</h2><p>快速记录普胜、小金、大金和犯规，自动轮转与排名，适合整晚朋友局。</p><ul><li>2–8 人</li><li>30–120 分钟</li><li>可配规则</li></ul><div><button className="primary" onClick={() => onStart("score")}>开始设置 <span>→</span></button><button className="text-button" onClick={() => onStart("score_cards")}>同时加入奇招牌</button></div></article>
     <article className="mode-card featured"><span className="mode-number">02</span><div className="mode-symbol">8</div><p className="kicker">TRICK DECK</p><h2>奇招卡牌局</h2><p>51 张实体牌，不放回抽取。每一杆多一个意外，也保留安全跳过机制。</p><ul><li>2 人推荐</li><li>15–60 分钟</li><li>轻松</li></ul><div><button className="secondary" onClick={() => onStart("cards")}>查看并开始</button></div></article>
   </div></div>;
 }
 
-type CustomCardRow = { id: string; title: string; effect: string; default_quantity: number; safety_level: "low" | "medium" | "review"; safety_note: string | null };
+type CustomCardRow = { id: string; title: string; effect: string; default_quantity: number; safety_level: "low" | "medium" | "review"; safety_note: string | null; supportedGames: Array<"chinese_eight" | "snooker"> };
 
 function deckEditorQuantities(customCards: CustomCardRow[], quantity = 1) {
   return Object.fromEntries([
@@ -712,7 +730,11 @@ function DecksPage({ user }: { user: AuthUser | null }) {
   const [editingCardId, setEditingCardId] = useState("");
   const [cardSafetyLevel, setCardSafetyLevel] = useState<"low" | "medium" | "review">("low");
   const [cardSafetyNote, setCardSafetyNote] = useState("");
+  const [cardSupportsSnooker, setCardSupportsSnooker] = useState(false);
   const [message, setMessage] = useState("");
+  const [pendingDelete, setPendingDelete] = useState<{ path: string; label: string } | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const catalogDialogRef = useRef<HTMLDialogElement>(null);
   const official = getOfficialDeck("complete");
   const refresh = async () => {
@@ -767,28 +789,43 @@ function DecksPage({ user }: { user: AuthUser | null }) {
     resetEditor(); await refresh(); setMessage("牌组已保存");
   };
   const saveCard = async () => {
-    await apiPayload(await fetch(editingCardId ? `/api/custom-cards/${editingCardId}` : "/api/custom-cards", { method: editingCardId ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: cardTitle, effect: cardEffect, safetyLevel: cardSafetyLevel, safetyNote: cardSafetyNote, defaultQuantity: 1 }) }));
-    setCardTitle(""); setCardEffect(""); setCardSafetyLevel("low"); setCardSafetyNote(""); setEditingCardId(""); await refresh(); setMessage(editingCardId ? "自定义卡牌已更新" : "自定义卡牌已创建");
+    await apiPayload(await fetch(editingCardId ? `/api/custom-cards/${editingCardId}` : "/api/custom-cards", { method: editingCardId ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: cardTitle, effect: cardEffect, safetyLevel: cardSafetyLevel, safetyNote: cardSafetyNote, supportedGames: ["chinese_eight", ...(cardSupportsSnooker ? ["snooker"] : [])], defaultQuantity: 1 }) }));
+    setCardTitle(""); setCardEffect(""); setCardSafetyLevel("low"); setCardSafetyNote(""); setCardSupportsSnooker(false); setEditingCardId(""); await refresh(); setMessage(editingCardId ? "自定义卡牌已更新" : "自定义卡牌已创建");
   };
-  const remove = async (path: string) => { await apiPayload(await fetch(path, { method: "DELETE" })); await refresh(); setMessage("已删除；历史版本快照保持不变"); };
+  const remove = async () => {
+    if (!pendingDelete || deleteBusy) return;
+    setDeleteBusy(true); setDeleteError("");
+    try {
+      await apiPayload(await fetch(pendingDelete.path, { method: "DELETE" }));
+      await refresh();
+      setMessage(`${pendingDelete.label}已删除；历史版本快照保持不变`);
+      setPendingDelete(null);
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : "删除失败，请重试");
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
   return <div className="content-page page-shell">
     <header className="page-title split"><div><p className="kicker">DECK LIBRARY</p><h1>牌组</h1></div><div className="deck-summary"><span>1<small>官方牌组</small></span><span>{decks.length}<small>我的牌组</small></span></div></header>
     <div className="official-deck-grid"><button type="button" className="official-deck" aria-haspopup="dialog" onClick={() => setCatalogOpen(true)}><div className="official-art"><span>8</span></div><div><p className="kicker">OFFICIAL · V1</p><h2>全量牌库</h2><p>{official.description}</p><div className="tag-row"><span>{officialDeckCardCount(official)} 张</span><span>唯一官方入口</span></div></div></button></div>
     {user ? <>
       <section className="card-catalog deck-editor"><div className="section-heading"><div><p className="kicker">MY DECKS</p><h2>{editingId ? "编辑牌组" : "新建牌组"}</h2></div>{editingId && <button onClick={resetEditor}>取消编辑</button>}</div>
-        <label><span>牌组名称</span><input maxLength={40} value={deckName} onChange={(event) => setDeckName(event.target.value)} /></label>
-        <div className="deck-list">{decks.map((deck) => <article key={deck.id}><button type="button" className="deck-list-item-main" onClick={() => void editDeck(deck.id)}><b>{deck.name}</b><small>V{deck.current_version}</small></button><button type="button" className="deck-list-action" aria-label={`复制${deck.name}`} onClick={() => void copyDeck(deck.id)}>复制</button><button type="button" className="deck-list-action is-danger" aria-label={`删除${deck.name}`} onClick={() => void remove(`/api/decks/${deck.id}`)}>删除</button></article>)}</div>
+        <label><span>牌组名称</span><input name="deck-name" autoComplete="off" maxLength={40} value={deckName} onChange={(event) => setDeckName(event.target.value)} /></label>
+        <div className="deck-list">{decks.map((deck) => <article key={deck.id}><button type="button" className="deck-list-item-main" onClick={() => void editDeck(deck.id)}><b>{deck.name}</b><small>V{deck.current_version}</small></button><button type="button" className="deck-list-action" aria-label={`复制${deck.name}`} onClick={() => void copyDeck(deck.id)}>复制</button><button type="button" className="deck-list-action is-danger" aria-label={`删除${deck.name}`} onClick={() => { setDeleteError(""); setPendingDelete({ path: `/api/decks/${deck.id}`, label: `牌组“${deck.name}”` }); }}>删除</button></article>)}</div>
         <div className="catalog-list deck-card-picker virtualized-list">{cards.map((card) => { const key = `official:${card.id}`; return <article key={key}><input aria-label={`${card.title}数量`} type="number" min="0" max="10" value={quantities[key] ?? 0} onChange={(event) => setQuantity(key, Number(event.target.value))} /><div><b>{card.title}</b><p>{card.effect}</p></div></article>; })}{customCards.map((card) => { const key = `custom:${card.id}`; return <article key={key}><input aria-label={`${card.title}数量`} type="number" min="0" max="10" value={quantities[key] ?? 0} onChange={(event) => setQuantity(key, Number(event.target.value))} /><div><b>{card.title} <em>我的卡牌</em></b><p>{card.effect}</p></div></article>; })}</div>
         <button className="primary" disabled={!deckName.trim() || !Object.values(quantities).some(Boolean)} onClick={() => void saveDeck().catch((error) => setMessage(error instanceof Error ? error.message : "保存失败"))}>明确保存</button>
       </section>
-      <section className="card-catalog custom-card-editor"><div className="section-heading"><div><p className="kicker">MY CARDS</p><h2>{editingCardId ? "编辑卡牌" : "我的卡牌"}</h2></div>{editingCardId && <button onClick={() => { setEditingCardId(""); setCardTitle(""); setCardEffect(""); setCardSafetyNote(""); }}>取消编辑</button>}</div><div className="eight-form-grid"><label className="wide"><span>标题</span><input maxLength={40} value={cardTitle} onChange={(event) => setCardTitle(event.target.value)} /></label><label className="wide"><span>效果</span><input maxLength={500} value={cardEffect} onChange={(event) => setCardEffect(event.target.value)} /></label></div><button disabled={!cardTitle.trim() || !cardEffect.trim()} onClick={() => void saveCard().catch((error) => setMessage(error instanceof Error ? error.message : "保存失败"))}>{editingCardId ? "保存卡牌" : "创建卡牌"}</button><div className="deck-list">{customCards.map((card) => <article key={card.id}><button type="button" className="deck-list-item-main" onClick={() => { setEditingCardId(card.id); setCardTitle(card.title); setCardEffect(card.effect); setCardSafetyLevel(card.safety_level); setCardSafetyNote(card.safety_note ?? ""); }}><b>{card.title}</b><small>{card.effect}</small></button><button type="button" className="deck-list-action is-danger" aria-label={`删除${card.title}`} onClick={() => void remove(`/api/custom-cards/${card.id}`)}>删除</button></article>)}</div></section>
+      <section className="card-catalog custom-card-editor"><div className="section-heading"><div><p className="kicker">MY CARDS</p><h2>{editingCardId ? "编辑卡牌" : "我的卡牌"}</h2></div>{editingCardId && <button onClick={() => { setEditingCardId(""); setCardTitle(""); setCardEffect(""); setCardSafetyNote(""); setCardSupportsSnooker(false); }}>取消编辑</button>}</div><div className="eight-form-grid"><label className="wide"><span>标题</span><input maxLength={40} value={cardTitle} onChange={(event) => setCardTitle(event.target.value)} /></label><label className="wide"><span>效果</span><input maxLength={500} value={cardEffect} onChange={(event) => setCardEffect(event.target.value)} /></label><label className="wide custom-card-snooker-confirm"><input type="checkbox" checked={cardSupportsSnooker} onChange={(event) => setCardSupportsSnooker(event.target.checked)} /><span>我已确认此牌不改变斯诺克球值、合法顺序、台面复位或胜负条件</span></label></div><button disabled={!cardTitle.trim() || !cardEffect.trim()} onClick={() => void saveCard().catch((error) => setMessage(error instanceof Error ? error.message : "保存失败"))}>{editingCardId ? "保存卡牌" : "创建卡牌"}</button><div className="deck-list">{customCards.map((card) => <article key={card.id}><button type="button" className="deck-list-item-main" onClick={() => { setEditingCardId(card.id); setCardTitle(card.title); setCardEffect(card.effect); setCardSafetyLevel(card.safety_level); setCardSafetyNote(card.safety_note ?? ""); setCardSupportsSnooker(card.supportedGames.includes("snooker")); }}><b>{card.title}</b><small>{card.effect}{card.supportedGames.includes("snooker") ? " · 兼容斯诺克" : ""}</small></button><button type="button" className="deck-list-action is-danger" aria-label={`删除${card.title}`} onClick={() => { setDeleteError(""); setPendingDelete({ path: `/api/custom-cards/${card.id}`, label: `卡牌“${card.title}”` }); }}>删除</button></article>)}</div></section>
       {message && <p className="form-message" role="status">{message}</p>}
     </> : <section className="card-catalog"><h2>登录后创建自己的卡牌与牌组</h2><p className="form-message">官方全量牌库无需登录即可使用。</p></section>}
     {catalogOpen && <dialog ref={catalogDialogRef} className="setup-modal card-catalog-modal" aria-labelledby="official-catalog-title" onClose={() => setCatalogOpen(false)}><header className="modal-heading"><div><p className="kicker">ALL OFFICIAL CARDS</p><h2 id="official-catalog-title">官方卡牌清单</h2></div><button type="button" className="icon-button" aria-label="关闭官方卡牌清单" onClick={() => catalogDialogRef.current?.close()}>×</button></header><div className="catalog-modal-body"><label className="search"><span aria-hidden="true">⌕</span><input aria-label="搜索官方卡牌" type="search" placeholder="例如：安全挑战…" value={query} onChange={(event) => setQuery(event.target.value)} /></label><div className="catalog-list virtualized-list">{cards.map((card) => <article key={card.id}><span>{card.id.slice(-3)}</span><div><b>{card.title}{card.count > 1 && <em> ×{card.count}</em>}</b><p>{card.effect}</p></div></article>)}</div></div></dialog>}
+    {pendingDelete && <ConfirmDialog title="确认删除？" body={`${pendingDelete.label}将立即删除，但历史对局中的版本快照会保留。`} cancelLabel="取消" confirmLabel="确认删除" busy={deleteBusy} error={deleteError} onCancel={() => { setPendingDelete(null); setDeleteError(""); }} onConfirm={() => void remove()} />}
   </div>;
 }
 
 function EightBallSetupDialog({ defaultLayout, onClose, onStart, user, onCloudRoomCreated }: { defaultLayout: EightBallLayout; onClose: () => void; onStart: (draft: EightBallDraft) => void; user: AuthUser | null; onCloudRoomCreated: (code: string) => void }) {
+  const dialogRef = useModalDialog(onClose);
   const [names, setNames] = useState<[string, string]>(["玩家 A", "玩家 B"]);
   const [raceMode, setRaceMode] = useState<"race" | "free">("free");
   const [raceTo, setRaceTo] = useState(5);
@@ -847,8 +884,7 @@ function EightBallSetupDialog({ defaultLayout, onClose, onStart, user, onCloudRo
     }
   };
   return (
-    <div className="modal-backdrop">
-      <section className="setup-modal eight-setup" role="dialog" aria-modal="true" aria-labelledby="eight-setup-title">
+    <dialog ref={dialogRef} className="setup-modal eight-setup" aria-labelledby="eight-setup-title" onCancel={(event) => { event.preventDefault(); onClose(); }}>
         <header className="modal-heading">
           <div><p className="kicker">CHINESE EIGHT · NEW MATCH</p><h2 id="eight-setup-title">创建中八比赛</h2></div>
           <button className="icon-button" aria-label="关闭中八比赛设置" onClick={onClose}>×</button>
@@ -867,7 +903,7 @@ function EightBallSetupDialog({ defaultLayout, onClose, onStart, user, onCloudRo
               {names.map((name, index) => (
                 <label className="player-input" key={index}>
                   <span>{index ? "红" : "蓝"}</span>
-                  <input aria-label={`中八玩家 ${index + 1} 姓名`} maxLength={16} value={name} onChange={(event) => setNames(names.map((item, itemIndex) => itemIndex === index ? event.target.value : item) as [string, string])} />
+                  <input name={`eight-ball-player-${index + 1}-name`} autoComplete="off" aria-label={`中八玩家 ${index + 1} 姓名`} maxLength={16} value={name} onChange={(event) => setNames(names.map((item, itemIndex) => itemIndex === index ? event.target.value : item) as [string, string])} />
                 </label>
               ))}
             </div>
@@ -876,17 +912,17 @@ function EightBallSetupDialog({ defaultLayout, onClose, onStart, user, onCloudRo
             <div className="setup-title"><span>02</span><div><b>赛制</b><small>达到目标后仍由你确认结束</small></div></div>
             <div className="eight-form-grid">
               <label><span>赛制</span><select value={raceMode} onChange={(event) => setRaceMode(event.target.value as "race" | "free")}><option value="race">抢 N 局</option><option value="free">自由计分</option></select></label>
-              {raceMode === "race" && <label><span>抢几局</span><input type="number" min="1" max="99" value={raceTo} onChange={(event) => setRaceTo(Number(event.target.value))} /></label>}
+              {raceMode === "race" && <label><span>抢几局</span><input name="eight-ball-race-to" autoComplete="off" type="number" min="1" max="99" value={raceTo} onChange={(event) => setRaceTo(Number(event.target.value))} /></label>}
             </div>
           </section>
           <section className="setup-section">
             <div className="setup-title"><span>03</span><div><b>比赛资料</b><small>全部可选，将进入战绩导出</small></div></div>
             <div className="eight-form-grid">
-              <label><span>比赛名称</span><input maxLength={40} value={title} onChange={(event) => setTitle(event.target.value)} /></label>
-              <label><span>地点</span><input maxLength={40} value={location} onChange={(event) => setLocation(event.target.value)} /></label>
+              <label><span>比赛名称</span><input name="eight-ball-title" autoComplete="off" maxLength={40} value={title} onChange={(event) => setTitle(event.target.value)} /></label>
+              <label><span>地点</span><input name="eight-ball-location" autoComplete="off" maxLength={40} value={location} onChange={(event) => setLocation(event.target.value)} /></label>
               <label><span>先开球（选填）</span><select value={firstServer} onChange={(event) => setFirstServer(Number(event.target.value) as 0 | 1)}><option value={0}>{names[0] || "玩家 A"}</option><option value={1}>{names[1] || "玩家 B"}</option></select></label>
               <label><span>后续开球（选填）</span><select value={serveRule} onChange={(event) => setServeRule(event.target.value as EightBallServeRule)}><option value="alternate">轮流开球</option><option value="winner">胜者开球</option></select></label>
-              <label className="wide"><span>备注</span><input maxLength={120} placeholder="例如：布局可在计分板内切换…" value={note} onChange={(event) => setNote(event.target.value)} /></label>
+              <label className="wide"><span>备注</span><input name="eight-ball-note" autoComplete="off" maxLength={120} placeholder="例如：布局可在计分板内切换…" value={note} onChange={(event) => setNote(event.target.value)} /></label>
             </div>
           </section>
           <section className="setup-section">
@@ -907,8 +943,7 @@ function EightBallSetupDialog({ defaultLayout, onClose, onStart, user, onCloudRo
           )}
         </footer>
         {hostMode === "cloud" && <p className="form-message" role="status">{cloudError || (user ? "确认后将直接创建云端实时房间并取得房间码。" : "登录后可用云端实时房间；游客仍可使用本机计分。")}</p>}
-      </section>
-    </div>
+    </dialog>
   );
 }
 
@@ -957,6 +992,21 @@ function buildEightBallReport(match: EightBallMatch, options: ReportOptions) {
   parts.push(...rounds.map((round,index)=>{const winner=players.find((player)=>player.id===round.winnerId)?.name??""; const prefix=options.time?`${reportClock(round.confirmedAt)}  `:""; const score=players.map((player)=>round.after[player.id]??0).join(" : "); const note=round.note?` · ${round.note.slice(0,24)}`:""; const rowY=y+index*54; return `<rect x="50" y="${rowY}" width="800" height="45" rx="10" fill="${index%2?"#0d1b16":"#10211a"}"/><text x="70" y="${rowY+29}" class="row">${prefix}第 ${index+1} 局 · ${escapeMarkup(winner)} · ${EIGHT_BALL_WIN_LABELS[round.winType]}${escapeMarkup(note)}</text><text x="780" y="${rowY+29}" text-anchor="end" class="strong">${score}</text>`;})); y+=rounds.length*54+55;
   const height=Math.max(1200,y); return `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="${height}" viewBox="0 0 900 ${height}">${reportStyles()}${parts.join("")}<text x="450" y="${height-25}" text-anchor="middle" class="small">台球奇招 · MATCH REPORT</text></svg>`;
 }
+
+function exportSnookerJson(match: SnookerMatch) {
+  const stats = getSnookerBreakStats(match);
+  downloadText(`斯诺克战绩-${match.id}.json`, JSON.stringify({
+    exportVersion: 2,
+    exportedAt: new Date().toISOString(),
+    match,
+    matchScore: Object.fromEntries(match.players.map((player) => [player.id, match.framesWon[player.id]])),
+    frameScores: match.completedFrames.map((frame) => ({ number: frame.number, scores: frame.scores, winnerId: frame.winnerId, endReason: frame.endReason })),
+    stats,
+  }, null, 2), "application/json");
+}
+
+function printSnooker(match: SnookerMatch, options: ReportOptions) { openReportPdf(buildSnookerReport(match, options), match.title || "斯诺克比赛"); }
+function exportSnookerImage(match: SnookerMatch, options: ReportOptions) { downloadText(`斯诺克战绩-${match.id}.svg`, buildSnookerReport(match, options), "image/svg+xml"); }
 
 type UserDeckSummary = { id: string; name: string; current_version: number; updated_at: number };
 
@@ -1031,12 +1081,12 @@ function buildScoreReport(match: BilliardsMatch, options: ReportOptions) {
 }
 function printScoreMatch(match: BilliardsMatch, options: ReportOptions) { openReportPdf(buildScoreReport(match,options),"追分战绩"); }
 function exportScoreImage(match: BilliardsMatch, options: ReportOptions) { downloadText(`追分战绩-${match.id}.svg`,buildScoreReport(match,options),"image/svg+xml"); }
-function UnifiedHistoryPage({ history, eightBallHistory, selectedId, onSelect, onDeleteMatch }: { history: BilliardsMatch[]; eightBallHistory: EightBallMatch[]; selectedId?: string; onSelect: (id: string) => void; onDeleteMatch: (id: string) => void }) {
+function UnifiedHistoryPage({ history, eightBallHistory, snookerHistory, selectedId, onSelect, onDeleteMatch }: { history: BilliardsMatch[]; eightBallHistory: EightBallMatch[]; snookerHistory: SnookerMatch[]; selectedId?: string; onSelect: (id: string) => void; onDeleteMatch: (id: string) => void }) {
   const selected = history.find((match) => match.id === selectedId);
   const [reportOptions, setReportOptions] = useState(DEFAULT_REPORT_OPTIONS);
   if (!selected) {
-    const all = [...history.map((match) => ({ at: match.endedAt ?? match.startedAt, kind: "legacy" as const, match })), ...eightBallHistory.map((match) => ({ at: match.endedAt ?? match.startedAt, kind: "eight" as const, match }))].sort((a, b) => b.at - a.at);
-    return <div className="content-page page-shell"><header className="page-title"><p className="kicker">MATCH HISTORY</p><h1>战绩</h1><p>中八与追分使用统一的战绩入口，可查看完整流水并导出。</p></header>{all.length ? <div className="history-grid">{all.map((item) => { if (item.kind === "eight") { const match = item.match; const stats = calculateEightBallStats(match); const winner = [...match.players].sort((a, b) => stats[b.id].score - stats[a.id].score)[0]; return <div className="history-card" key={match.id}><button className="history-card-main" onClick={() => onSelect(match.id)}><span className="history-type eight">中八双人赛</span><b>{match.players.map((player) => player.name).join(" · ")}</b><small>{formatTime(match.startedAt)} · {durationLabel(eightBallElapsedMs(match))}</small><div><span>获胜者</span><strong>{winner.name} · {match.players.map((p) => stats[p.id].score).join(" : ")}</strong><i>→</i></div></button><button className="history-delete" onClick={() => onDeleteMatch(match.id)}>删除</button></div>; } const match = item.match; const winner = getRankings(match)[0]; return <div className="history-card" key={match.id}><button className="history-card-main" onClick={() => onSelect(match.id)}><span className="history-type">{match.mode === "cards" ? "奇招牌" : match.mode === "score_cards" ? "追分 + 奇招牌" : "多人追分"}</span><b>{match.players.map((player) => player.name).join(" · ")}</b><small>{formatTime(match.startedAt)} · {formatDuration(match.startedAt, match.endedAt)}</small><div><span>第一名</span><strong>{winner?.name}{match.mode !== "cards" && ` · ${winner?.score} 分`}</strong><i>→</i></div></button><button className="history-delete" onClick={() => onDeleteMatch(match.id)}>删除</button></div>; })}</div> : <div className="large-empty"><span>⌁</span><h2>还没有战绩</h2><p>完成第一场比赛后，逐局流水会保存在这里。</p></div>}</div>;
+    const all = [...history.map((match) => ({ at: match.endedAt ?? match.startedAt, kind: "legacy" as const, match })), ...eightBallHistory.map((match) => ({ at: match.endedAt ?? match.startedAt, kind: "eight" as const, match })), ...snookerHistory.map((match) => ({ at: match.endedAt ?? match.startedAt, kind: "snooker" as const, match }))].sort((a, b) => b.at - a.at);
+    return <div className="content-page page-shell"><header className="page-title"><p className="kicker">MATCH HISTORY</p><h1>战绩</h1><p>斯诺克、中八与追分使用统一的战绩入口。</p></header>{all.length ? <div className="history-grid">{all.map((item) => { if (item.kind === "snooker") { const match = item.match; const stats = getSnookerBreakStats(match); const winner = [...match.players].sort((a, b) => match.framesWon[b.id] - match.framesWon[a.id])[0]; return <div className="history-card" key={match.id}><button className="history-card-main" onClick={() => onSelect(match.id)}><span className="history-type snooker">斯诺克</span><b>{match.players.map((player) => player.name).join(" · ")}</b><small>{formatTime(match.startedAt)} · {durationLabel(snookerElapsedMs(match))}</small><div><span>局分</span><strong>{winner.name} · {match.players.map((player) => match.framesWon[player.id]).join(" : ")} · 最高单杆 {stats.highestBreak}</strong><i>→</i></div></button><button className="history-delete" onClick={() => onDeleteMatch(match.id)}>删除</button></div>; } if (item.kind === "eight") { const match = item.match; const stats = calculateEightBallStats(match); const winner = [...match.players].sort((a, b) => stats[b.id].score - stats[a.id].score)[0]; return <div className="history-card" key={match.id}><button className="history-card-main" onClick={() => onSelect(match.id)}><span className="history-type eight">中八双人赛</span><b>{match.players.map((player) => player.name).join(" · ")}</b><small>{formatTime(match.startedAt)} · {durationLabel(eightBallElapsedMs(match))}</small><div><span>获胜者</span><strong>{winner.name} · {match.players.map((p) => stats[p.id].score).join(" : ")}</strong><i>→</i></div></button><button className="history-delete" onClick={() => onDeleteMatch(match.id)}>删除</button></div>; } const match = item.match; const winner = getRankings(match)[0]; return <div className="history-card" key={match.id}><button className="history-card-main" onClick={() => onSelect(match.id)}><span className="history-type">{match.mode === "cards" ? "奇招牌" : match.mode === "score_cards" ? "追分 + 奇招牌" : "多人追分"}</span><b>{match.players.map((player) => player.name).join(" · ")}</b><small>{formatTime(match.startedAt)} · {formatDuration(match.startedAt, match.endedAt)}</small><div><span>第一名</span><strong>{winner?.name}{match.mode !== "cards" && ` · ${winner?.score} 分`}</strong><i>→</i></div></button><button className="history-delete" onClick={() => onDeleteMatch(match.id)}>删除</button></div>; })}</div> : <div className="large-empty"><span>⌁</span><h2>还没有战绩</h2><p>完成第一场比赛后，逐局流水会保存在这里。</p></div>}</div>;
   }
   const rankings = getRankings(selected);
   const timeline = [
@@ -1086,17 +1136,34 @@ function LocalMigrationPanel() {
     } catch (error) { setMessage(error instanceof Error ? error.message : "迁移失败，可保留当前备份后重试"); }
     finally { setBusy(false); }
   };
-  return <section className="migration-panel"><header><p className="kicker">R3 · LOCAL MIGRATION</p><h2>本机数据迁移</h2></header>{!migration ? <button className="primary" disabled={busy} onClick={scan}>{busy ? "正在扫描…" : "扫描本机数据"}</button> : <><div className="migration-counts"><span><b>{migration.preview.players}</b>玩家</span><span><b>{migration.preview.presets}</b>预设</span><span><b>{migration.preview.decks}</b>牌组</span><span><b>{migration.preview.matches}</b>对局</span><span><b>{migration.preview.eightBallRounds}</b>中八流水</span></div><small className="migration-checksum">备份校验和：{migration.backup.checksum}</small><div className="migration-actions"><button className="secondary" onClick={scan} disabled={busy}>重新扫描</button><button className="secondary" onClick={backup} disabled={busy}>下载完整 JSON 备份</button></div><label className="migration-confirm"><input type="checkbox" checked={confirmed} disabled={!backupDownloaded || busy} onChange={(event) => setConfirmed(event.target.checked)} /><span>我已保存备份，并确认把以上数据迁移到当前登录账号</span></label><button className="primary" disabled={!confirmed || !backupDownloaded || busy || migration.resources.length === 0} onClick={upload}>{busy ? "正在迁移…" : "确认并开始迁移"}</button></>}{message && <p className="migration-message" role="status">{message}</p>}</section>;
+  return <section className="migration-panel"><header><p className="kicker">R3 · LOCAL MIGRATION</p><h2>本机数据迁移</h2></header>{!migration ? <button className="primary" disabled={busy} onClick={scan}>{busy ? "正在扫描…" : "扫描本机数据"}</button> : <><div className="migration-counts"><span><b>{migration.preview.players}</b>玩家</span><span><b>{migration.preview.presets}</b>预设</span><span><b>{migration.preview.decks}</b>牌组</span><span><b>{migration.preview.matches}</b>对局</span><span><b>{migration.preview.eightBallRounds}</b>中八流水</span></div><small className="migration-checksum">备份校验和：{migration.backup.checksum}</small><div className="migration-actions"><button className="secondary" onClick={scan} disabled={busy}>重新扫描</button><button className="secondary" onClick={backup} disabled={busy}>下载完整 JSON 备份</button></div><label className="migration-confirm"><input name="migration-confirmed" autoComplete="off" type="checkbox" checked={confirmed} disabled={!backupDownloaded || busy} onChange={(event) => setConfirmed(event.target.checked)} /><span>我已保存备份，并确认把以上数据迁移到当前登录账号</span></label><button className="primary" disabled={!confirmed || !backupDownloaded || busy || migration.resources.length === 0} onClick={upload}>{busy ? "正在迁移…" : "确认并开始迁移"}</button></>}{message && <p className="migration-message" role="status">{message}</p>}</section>;
+}
+
+function accountModeFromLocation(): "login" | "register" {
+  return typeof window !== "undefined" && new URLSearchParams(window.location.search).get("auth") === "register" ? "register" : "login";
 }
 
 function AccountForm({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void }) {
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register">(accountModeFromLocation);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [nickname, setNickname] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  useEffect(() => {
+    const syncMode = () => setMode(accountModeFromLocation());
+    window.addEventListener("popstate", syncMode);
+    return () => window.removeEventListener("popstate", syncMode);
+  }, []);
+  const selectMode = (nextMode: "login" | "register") => {
+    const url = new URL(window.location.href);
+    if (nextMode === "register") url.searchParams.set("auth", "register");
+    else url.searchParams.delete("auth");
+    window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    setMode(nextMode);
+    setMessage("");
+  };
   const submit = async () => {
     if (mode === "register") {
       const usernameError = registrationUsernameError(username);
@@ -1113,7 +1180,7 @@ function AccountForm({ onAuthenticated }: { onAuthenticated: (user: AuthUser) =>
     } catch (error) { setMessage(error instanceof Error ? error.message : "账号操作失败"); }
     finally { setBusy(false); }
   };
-  return <section className="account-panel"><div className="segmented account-mode-switch"><button className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>登录</button><button className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>邀请码注册</button></div><form onSubmit={(event) => { event.preventDefault(); void submit(); }}><label>用户名<input name="username" autoComplete="username" spellCheck={false} maxLength={24} required value={username} onChange={(event) => setUsername(event.target.value)} />{mode === "register" && <small>{USERNAME_HELP_TEXT}</small>}</label>{mode === "register" && <label>昵称<input name="nickname" autoComplete="nickname" maxLength={40} value={nickname} onChange={(event) => setNickname(event.target.value)} /></label>}<label>密码<input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={6} maxLength={128} required value={password} onChange={(event) => setPassword(event.target.value)} /></label>{mode === "register" && <label>固定邀请码<input name="invite-code" type="password" autoComplete="off" spellCheck={false} required value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} /></label>}<button className="primary" disabled={busy}>{busy ? "正在连接…" : mode === "login" ? "登录并恢复同步" : "创建账号"}</button></form>{message && <p className="form-message" role="alert">{message}</p>}</section>;
+  return <section className="account-panel"><div className="segmented account-mode-switch"><button type="button" className={mode === "login" ? "active" : ""} aria-pressed={mode === "login"} onClick={() => selectMode("login")}>登录</button><button type="button" className={mode === "register" ? "active" : ""} aria-pressed={mode === "register"} onClick={() => selectMode("register")}>邀请码注册</button></div><form onSubmit={(event) => { event.preventDefault(); void submit(); }}><label>用户名<input name="username" autoComplete="username" spellCheck={false} maxLength={24} required value={username} onChange={(event) => setUsername(event.target.value)} />{mode === "register" && <small>{USERNAME_HELP_TEXT}</small>}</label>{mode === "register" && <label>昵称<input name="nickname" autoComplete="nickname" maxLength={40} value={nickname} onChange={(event) => setNickname(event.target.value)} /></label>}<label>密码<input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={6} maxLength={128} required value={password} onChange={(event) => setPassword(event.target.value)} /></label>{mode === "register" && <label>固定邀请码<input name="invite-code" type="password" autoComplete="off" spellCheck={false} required value={inviteCode} onChange={(event) => setInviteCode(event.target.value)} /></label>}<button className="primary" disabled={busy}>{busy ? "正在连接…" : mode === "login" ? "登录并恢复同步" : "创建账号"}</button></form>{message && <p className="form-message" role="alert">{message}</p>}</section>;
 }
 
 type CloudMatchRow = { id: string; mode: string; status: string; version: number; created_at: number; ended_at: number | null };
@@ -1171,6 +1238,12 @@ type RealtimeEightBall = {
   roundStartedAt: number;
   cards?: RealtimeCards;
 };
+type RealtimeSnooker = {
+  mode: "snooker";
+  match: SnookerMatch;
+  players: [{ id: string; nickname: string; userId?: string }, { id: string; nickname: string; userId?: string }];
+  cards?: RealtimeCards;
+};
 type RealtimeSnapshot = {
   matchId: string;
   roomCode: string;
@@ -1180,9 +1253,10 @@ type RealtimeSnapshot = {
   events: Array<{ sequenceNo: number; kind: string; payload: Record<string, unknown> }>;
   chaseScore: RealtimeChaseScore | null;
   eightBall: RealtimeEightBall | null;
+  snooker: RealtimeSnooker | null;
 };
 
-type RealtimeCommandPayload = Record<string, string | number | string[] | Record<string, number>>;
+type RealtimeCommandPayload = Record<string, string | number | boolean | Array<string | number> | Record<string, unknown> | undefined>;
 
 /**
  * P1 显示名兜底（ROADMAP D1）：注册用户一律展示注册昵称；理论上无昵称的
@@ -1357,6 +1431,73 @@ function RealtimeEightBallPanel({
   </section>;
 }
 
+function SnookerHistoryReportDetail({ match, onBack, onDelete }: { match: SnookerMatch; onBack: () => void; onDelete: (id: string) => void }) {
+  const [reportOptions, setReportOptions] = useState(DEFAULT_REPORT_OPTIONS);
+  const actions = <div className="report-actions"><ReportControls options={reportOptions} onChange={setReportOptions} onImage={() => exportSnookerImage(match, reportOptions)} onPdf={() => printSnooker(match, reportOptions)} /><div className="export-actions minor"><button onClick={() => exportSnookerJson(match)}>JSON 备份</button><button className="danger-text" onClick={() => onDelete(match.id)}>删除战绩</button></div></div>;
+  return <SnookerHistoryDetail match={match} onBack={onBack} reportActions={actions} />;
+}
+
+const REALTIME_SNOOKER_BALLS = Object.entries(SNOOKER_BALL_VALUES) as Array<[SnookerBall, number]>;
+const REALTIME_SNOOKER_LABELS: Record<SnookerBall, string> = { red: "红", yellow: "黄", green: "绿", brown: "棕", blue: "蓝", pink: "粉", black: "黑" };
+
+type RealtimeSnookerLeadNotice = {
+  frameId: string;
+  frameNumber: number;
+  leaderName: string;
+  trailingName: string;
+  lead: number;
+  remainingPoints: number;
+  excessPoints: number;
+};
+
+function RealtimeSnookerLeadDialog({ notice, onDismiss }: { notice: RealtimeSnookerLeadNotice; onDismiss: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => { dialogRef.current?.showModal(); }, []);
+  return <dialog ref={dialogRef} className="snooker-lead-dialog" role="alertdialog" aria-labelledby="snooker-lead-title" aria-describedby="snooker-lead-description" onCancel={(event) => { event.preventDefault(); onDismiss(); }}>
+    <small>第 {notice.frameNumber} 局 · 超分提醒</small>
+    <h2 id="snooker-lead-title">{notice.leaderName} 已超分</h2>
+    <strong>超分 {notice.excessPoints} 分</strong>
+    <p id="snooker-lead-description">{notice.trailingName} 落后 {notice.lead} 分，台面剩余最高 {notice.remainingPoints} 分。</p>
+    <button type="button" className="primary" autoFocus onClick={onDismiss}>知道了</button>
+  </dialog>;
+}
+
+function RealtimeSnookerPanel({ snapshot, writable, busy, onCommand, isHost }: {
+  snapshot: RealtimeSnapshot;
+  writable: boolean;
+  busy: boolean;
+  onCommand: (kind: string, payload: RealtimeCommandPayload) => void;
+  isHost: boolean;
+}) {
+  const state = snapshot.snooker!;
+  const match = state.match;
+  const [freeBall, setFreeBall] = useState<SnookerBall>("yellow");
+  const [freeBallAs, setFreeBallAs] = useState<SnookerBall>("red");
+  const frame = match.currentFrame;
+  if (!frame) return null;
+  const disabled = busy || !writable || !!match.pausedAt;
+  const legal = (ball: SnookerBall) => {
+    if (disabled || frame.status !== "active") return false;
+    if (frame.pendingFreeBall) return ball === frame.pendingFreeBall.nominatedBall;
+    if (frame.phase === "reds") return ball === "red";
+    if (frame.phase === "colour_after_red") return ball !== "red";
+    return ball === (frame.nextColour ?? "black");
+  };
+  const striker = state.players.find((player) => player.id === frame.strikerId)!;
+  const targetReached = match.bestOf !== null && Object.values(match.framesWon).some((wins) => wins >= Math.ceil(match.bestOf! / 2));
+  return <section className="realtime-score-board realtime-snooker-board">
+    <header><div><p className="kicker">SNOOKER · SERVER AUTHORITY</p><h3>实时斯诺克</h3><small>{match.bestOf ? `Best of ${match.bestOf}` : "自由局"} · {match.initialReds} 红 · 当前第 {frame.number} 局 · {match.variant === "trick_cards" ? "奇招牌变体" : match.initialReds === 15 ? "标准规则" : "自定义红球局"}</small></div><button className="secondary" disabled={disabled || !match.events.length} onClick={() => onCommand("snooker.event.undo", {})}>↶ 撤销上一球</button></header>
+    {targetReached && <p className="target-notice">已达到获胜局数，请由房主核对后结束房间。</p>}
+    <div className="realtime-eight-score">{state.players.map((player, index) => <article className={index ? "blue" : "red"} key={player.id}><span>{player.nickname}{player.id === frame.strikerId ? " · 当前击球" : ""}</span><strong>{frame.scores[player.id]}</strong><small>局分 {match.framesWon[player.id]} · 本局最高 {Math.max(0, ...frame.breaks.filter((item) => item.playerId === player.id).map((item) => item.points), frame.currentBreak.playerId === player.id ? frame.currentBreak.points : 0)}</small></article>)}</div>
+    <div className="snooker-break-line"><div><span>当前单杆</span><strong>{frame.currentBreak.points}</strong></div><div><span>剩余红球</span><strong>{frame.redsRemaining}</strong></div><p><b>{striker.nickname}</b> · {frame.phase === "colour_after_red" ? "任意彩球" : frame.phase === "reds" ? "目标红球" : `目标${REALTIME_SNOOKER_LABELS[frame.nextColour ?? "black"]}球`}</p></div>
+    <div className="snooker-ball-row">{REALTIME_SNOOKER_BALLS.map(([ball, points]) => <button key={ball} className={`snooker-ball ${ball}`} disabled={!legal(ball)} onClick={() => onCommand("snooker.pot.record", { ball })}><span>{points}</span><b>{REALTIME_SNOOKER_LABELS[ball]}</b></button>)}</div>
+    <div className="snooker-primary-actions"><button className="primary" disabled={disabled || frame.status !== "active"} onClick={() => onCommand("snooker.visit.end", { reason: "miss" })}>未进／结束本杆</button>{isHost && [4, 5, 6, 7].map((points) => <button key={points} disabled={disabled || frame.status !== "active"} onClick={() => onCommand("snooker.foul.record", { values: [points] })}>犯规 +{points}</button>)}</div>
+    {isHost && frame.status === "completed" && <button className="primary" disabled={busy} onClick={() => onCommand("snooker.frame.finish", { winnerId: frame.winnerId, reason: "normal" })}>确认本局并进入下一局</button>}
+    {isHost && <details className="realtime-score-tools"><summary>裁判操作</summary><div className="realtime-tool-grid"><div><b>比赛状态</b><button disabled={busy} onClick={() => onCommand(match.pausedAt ? "snooker.resume" : "snooker.pause", {})}>{match.pausedAt ? "恢复比赛" : "暂停比赛"}</button><button disabled={disabled || frame.status !== "active"} onClick={() => onCommand("snooker.frame.restart", {})}>僵局重开本局</button></div><div><b>自由球</b><label>指定球<select value={freeBall} onChange={(event) => setFreeBall(event.target.value as SnookerBall)}>{REALTIME_SNOOKER_BALLS.map(([ball]) => <option value={ball} key={ball}>{REALTIME_SNOOKER_LABELS[ball]}</option>)}</select></label><label>作为目标球<select value={freeBallAs} onChange={(event) => setFreeBallAs(event.target.value as SnookerBall)}>{REALTIME_SNOOKER_BALLS.map(([ball]) => <option value={ball} key={ball}>{REALTIME_SNOOKER_LABELS[ball]}</option>)}</select></label><button disabled={disabled || frame.status !== "active"} onClick={() => onCommand("snooker.free_ball.declare", { nominatedBall: freeBall, valueAs: freeBallAs })}>声明自由球</button></div><div><b>犯规与重打</b><button disabled={disabled || frame.status !== "active"} onClick={() => onCommand("snooker.foul.record", { values: [4], isMiss: true })}>犯规 4 分并判 miss</button><button disabled={disabled || !frame.lastFoul?.isMiss} onClick={() => onCommand("snooker.replay.request", { kind: "from_position" })}>从现位重打</button><button disabled={disabled || !frame.lastFoul?.isMiss} onClick={() => onCommand("snooker.replay.request", { kind: "restore" })}>复原后重打</button></div><div><b>判局与黑球</b>{frame.phase === "final_black" && frame.scores[state.players[0].id] === frame.scores[state.players[1].id] && state.players.map((player) => <button key={player.id} disabled={disabled} onClick={() => onCommand("snooker.respotted_black.start", { firstStrikerId: player.id })}>重置黑球：{player.nickname}先手</button>)}{state.players.map((player) => <button key={player.id} disabled={disabled} onClick={() => onCommand("snooker.frame.finish", { winnerId: player.id, reason: "resignation" })}>认输／判{player.nickname}胜</button>)}</div></div></details>}
+    {!writable && <p className="readonly-hint">观战者只读；玩家仅可记录自己回合的合法进球与结束本杆。</p>}
+  </section>;
+}
+
 function RealtimeCardPanel({
   players,
   cards,
@@ -1417,14 +1558,30 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [cardNotice, setCardNotice] = useState<RealtimeCardNotice | null>(null);
+  const [snookerLeadNotice, setSnookerLeadNotice] = useState<RealtimeSnookerLeadNotice | null>(null);
   const [selectedSeatId, setSelectedSeatId] = useState("");
   const [claimTargets, setClaimTargets] = useState<Record<string, string>>({});
   const socketRef = useRef<WebSocket | null>(null);
   const snapshotRef = useRef<RealtimeSnapshot | null>(null);
   const kickedRef = useRef(false);
+  const announcedSnookerLead = useRef("");
 
   useEffect(() => {
     snapshotRef.current = snapshot;
+  }, [snapshot]);
+
+  useEffect(() => {
+    const snooker = snapshot?.snooker;
+    const frame = snooker?.match.currentFrame;
+    if (!snooker || !frame || frame.status !== "active") { announcedSnookerLead.current = ""; return; }
+    const situation = getSnookerScoreSituation(frame);
+    if (!situation.leaderId || !situation.trailingId || situation.excessPoints <= 0) { announcedSnookerLead.current = ""; return; }
+    const noticeKey = `${snapshot.matchId}:${frame.id}:${situation.leaderId}`;
+    if (announcedSnookerLead.current === noticeKey) return;
+    announcedSnookerLead.current = noticeKey;
+    const leaderName = snooker.players.find((player) => player.id === situation.leaderId)?.nickname ?? "领先选手";
+    const trailingName = snooker.players.find((player) => player.id === situation.trailingId)?.nickname ?? "落后选手";
+    setSnookerLeadNotice({ frameId: frame.id, frameNumber: frame.number, leaderName, trailingName, lead: situation.lead, remainingPoints: situation.remainingPoints, excessPoints: situation.excessPoints });
   }, [snapshot]);
 
   useEffect(() => {
@@ -1533,6 +1690,7 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
               const current = snapshotRef.current;
               return current?.chaseScore?.players.find((player) => player.id === playerId)?.nickname
                 ?? current?.eightBall?.players.find((player) => player.id === playerId)?.nickname
+                ?? current?.snooker?.players.find((player) => player.id === playerId)?.nickname
                 ?? playerId;
             });
             if (notice) setCardNotice(notice);
@@ -1552,6 +1710,7 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
                 const current = snapshotRef.current;
                 return current?.chaseScore?.players.find((player) => player.id === playerId)?.nickname
                   ?? current?.eightBall?.players.find((player) => player.id === playerId)?.nickname
+                  ?? current?.snooker?.players.find((player) => player.id === playerId)?.nickname
                   ?? playerId;
               });
               if (notice) setCardNotice(notice);
@@ -1881,8 +2040,12 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
     socket.send(JSON.stringify({ type: "command", operationId: crypto.randomUUID(), expectedVersion: snapshot.version, kind, payload }));
   };
   const connectionLabel = ({ idle: "未连接", connecting: "连接中", connected: "已同步", disconnected: "已断开" } as const)[connection];
+  const liveSnookerFrame = snapshot?.snooker?.match.currentFrame;
+  const showSnookerLeadNotice = Boolean(snookerLeadNotice && liveSnookerFrame?.id === snookerLeadNotice.frameId
+    && liveSnookerFrame.status === "active" && getSnookerScoreSituation(liveSnookerFrame).excessPoints > 0);
 
   return <div className="room-page page-shell">
+    {showSnookerLeadNotice && snookerLeadNotice && <RealtimeSnookerLeadDialog notice={snookerLeadNotice} onDismiss={() => setSnookerLeadNotice(null)} />}
     {cardNotice && <div className="card-notice-layer">
       <button type="button" className="card-notice-backdrop" aria-label="关闭卡牌通知" onClick={() => setCardNotice(null)} />
       <section className={`card-notice ${cardNotice.action}`} role="status" aria-live="polite" aria-atomic="true">
@@ -1899,6 +2062,8 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
       {snapshot.chaseScore?.cards && <RealtimeCardPanel players={snapshot.chaseScore.players} cards={snapshot.chaseScore.cards} writable={!!canWrite && connection === "connected" && snapshot.status !== "completed"} busy={busy} isHost={isHost} viewerUserId={user.id} viewerRole={self?.role ?? "spectator"} onCommand={sendCommand} />}
       {snapshot.eightBall && <RealtimeEightBallPanel snapshot={snapshot} writable={!!canWrite && connection === "connected" && snapshot.status !== "completed"} busy={busy} onCommand={sendCommand} isHost={isHost} />}
       {snapshot.eightBall?.cards && <RealtimeCardPanel players={snapshot.eightBall.players} cards={snapshot.eightBall.cards} writable={!!canWrite && connection === "connected" && snapshot.status !== "completed"} busy={busy} isHost={isHost} viewerUserId={user.id} viewerRole={self?.role ?? "spectator"} onCommand={sendCommand} />}
+      {snapshot.snooker && <RealtimeSnookerPanel snapshot={snapshot} writable={!!canWrite && connection === "connected" && snapshot.status !== "completed"} busy={busy} onCommand={sendCommand} isHost={isHost} />}
+      {snapshot.snooker?.cards && <RealtimeCardPanel players={snapshot.snooker.players} cards={snapshot.snooker.cards} writable={!!canWrite && connection === "connected" && snapshot.status !== "completed"} busy={busy} isHost={isHost} viewerUserId={user.id} viewerRole={self?.role ?? "spectator"} onCommand={sendCommand} />}
       <div className="room-members">{snapshot.members.map((member) => {
         const claimedSeat = roomPlayers.find((player) => player.userId === member.userId);
         const claimTarget = claimTargets[member.userId] ?? (unclaimedSeats.some((seat) => seat.id === selectedSeatId) ? selectedSeatId : unclaimedSeats[0]?.id ?? "");
@@ -1912,7 +2077,7 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
   </div>;
 }
 
-function CloudMatchesPanel({ ensureDevice, onRestore }: { ensureDevice: () => Promise<string>; onRestore: (match: BilliardsMatch | EightBallMatch, readOnly: boolean) => void }) {
+function CloudMatchesPanel({ ensureDevice, onRestore }: { ensureDevice: () => Promise<string>; onRestore: (match: CloudMatchSnapshot, readOnly: boolean) => void }) {
   const [matches, setMatches] = useState<CloudMatchRow[]>([]);
   const [busyId, setBusyId] = useState("");
   const [message, setMessage] = useState("");
@@ -1937,7 +2102,7 @@ function CloudMatchesPanel({ ensureDevice, onRestore }: { ensureDevice: () => Pr
         }));
       }
       const snapshot: unknown = JSON.parse(detail.match.snapshot_json);
-      if (!isStoredMatch(snapshot) && !isEightBallMatch(snapshot)) throw new Error("云端快照与当前版本不兼容");
+      if (!isStoredMatch(snapshot) && !isEightBallMatch(snapshot) && !isSnookerMatch(snapshot)) throw new Error("云端快照与当前版本不兼容");
       onRestore(snapshot, !takeover);
       setMessage(takeover ? "已接管并恢复云端最新版本" : "已按只读模式恢复云端快照");
       await load();
@@ -1990,7 +2155,7 @@ function AccountDataPanel({ onDeleted }: { onDeleted: () => void }) {
     setReportError(""); setConverting(format);
     try {
       const match = parseMatchReport(reportJson);
-      const svg = isEightBallMatch(match) ? buildEightBallReport(match, reportOptions) : buildScoreReport(match, reportOptions);
+      const svg = isSnookerMatch(match) ? buildSnookerReport(match, reportOptions) : isEightBallMatch(match) ? buildEightBallReport(match, reportOptions) : buildScoreReport(match, reportOptions);
       const canvas = await renderReportCanvas(svg);
       if (format === "png") {
         const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error("长图生成失败")), "image/png"));
@@ -2050,25 +2215,29 @@ function AccountSecurityDialog({ onClose }: { onClose: () => void }) {
   return <dialog ref={dialogRef} className="setup-modal account-security-dialog" aria-labelledby="change-password-title" onCancel={(event) => { event.preventDefault(); onClose(); }}><header className="modal-heading"><div><p className="kicker">ACCOUNT SECURITY</p><h2 id="change-password-title">更改密码</h2></div><button type="button" className="icon-button" aria-label="关闭更改密码弹窗" onClick={onClose}>×</button></header><form onSubmit={(event) => { event.preventDefault(); void changePassword(); }}><div className="setup-body account-security-form"><label>旧密码<input name="current-password" type="password" autoComplete="current-password" minLength={6} maxLength={64} required autoFocus value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label><label>新密码<input name="new-password" type="password" autoComplete="new-password" minLength={6} maxLength={64} required value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label><label>确认新密码<input name="confirm-new-password" type="password" autoComplete="new-password" minLength={6} maxLength={64} required value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label><small>忘记旧密码？请联系管理员将密码重置为 123456，登录后再立即更改。</small>{message && <p className="form-message" role="status">{message}</p>}</div><footer className="modal-actions"><button type="button" className="secondary" disabled={busy} onClick={onClose}>取消</button><button className="primary" disabled={busy}>{busy ? "正在更新…" : "确认更改密码"}</button></footer></form></dialog>;
 }
 
-function ProfilePage({ history, user, authLoading, sync, onAuthenticated, onLogout, onAccountDeleted, onRetrySync, ensureDevice, onRestore, onNavigate }: { history: BilliardsMatch[]; user: AuthUser | null; authLoading: boolean; sync: SyncView; onAuthenticated: (user: AuthUser) => void; onLogout: () => void; onAccountDeleted: () => void; onRetrySync: () => void; ensureDevice: () => Promise<string>; onRestore: (match: BilliardsMatch | EightBallMatch, readOnly: boolean) => void; onNavigate: (path: string) => void }) {
+function ProfilePage({ history, user, authLoading, sync, onAuthenticated, onLogout, onAccountDeleted, onRetrySync, ensureDevice, onRestore, onNavigate }: { history: BilliardsMatch[]; user: AuthUser | null; authLoading: boolean; sync: SyncView; onAuthenticated: (user: AuthUser) => void; onLogout: () => void; onAccountDeleted: () => void; onRetrySync: () => void; ensureDevice: () => Promise<string>; onRestore: (match: CloudMatchSnapshot, readOnly: boolean) => void; onNavigate: (path: string) => void }) {
   const [passwordOpen, setPasswordOpen] = useState(false);
   return <div className="content-page page-shell"><header className="profile-hero"><span className="profile-avatar">{user?.nickname.slice(0, 1) || "游"}</span><div><p className="kicker">{user ? `CLOUD ACCOUNT · ${user.publicCode}` : `LOCAL GUEST · V${APP_VERSION}`}</p><h1>{user ? user.nickname : "游客模式"}</h1><p>{user ? `@${user.username}` : "无需注册也可继续计分；登录后才会补传和跨设备恢复。"}</p></div>{user && <div className="profile-account-actions"><button className="secondary" onClick={onLogout}>退出账号</button><button className="secondary" onClick={() => setPasswordOpen(true)}>更改密码</button></div>}</header>{authLoading ? <section className="account-panel">正在检查账号会话…</section> : !user && <AccountForm onAuthenticated={onAuthenticated} />}<section className="local-stats"><div><strong>{history.length}</strong><span>本机已完成</span></div><div><strong>{history.reduce((sum, match) => sum + match.scoreEvents.length, 0)}</strong><span>计分流水</span></div><div><strong>{sync.pending}</strong><span>待补传项目</span></div></section><section className="settings-list"><header><p className="kicker">SYNC STATUS</p><h2>本机与云端</h2></header><div><span>◎</span><p><b>本地自动保存</b></p><strong className="state-good">已开启</strong></div><div><span>⇅</span><p><b>云端同步</b><small>{sync.message}</small></p><strong className={`sync-label ${sync.state}`}>{({ local: "仅本地", pending: "待同步", syncing: "同步中", synced: "已同步", failed: "同步失败", readonly: "只读" } as const)[sync.state]}</strong></div>{user && (sync.state === "failed" || sync.state === "pending") && <div className="settings-action"><button className="secondary" onClick={onRetrySync}>手动重试</button></div>}</section>{user && <><section className="realtime-entry-card"><div><p className="kicker">REALTIME ROOM</p><h2>多人实时房间</h2><small>创建或加入云端实时房间，全屏共同操作。</small></div><SpaLink className="primary" href="/room" navigate={onNavigate}>进入实时房间 <span>→</span></SpaLink></section><CloudMatchesPanel ensureDevice={ensureDevice} onRestore={onRestore} /><LocalMigrationPanel /><AccountDataPanel onDeleted={onAccountDeleted} />{passwordOpen && <AccountSecurityDialog onClose={() => setPasswordOpen(false)} />}</>}</div>;
 }
 
-function ConfirmDialog({ title, body, onCancel, onConfirm }: { title: string; body: string; onCancel: () => void; onConfirm: () => void }) {
-  return <div className="modal-backdrop"><section className="confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirm-dialog-title"><span className="warning-icon" aria-hidden="true">!</span><h2 id="confirm-dialog-title">{title}</h2><p>{body}</p><div className="modal-actions"><button className="secondary" onClick={onCancel}>继续对局</button><button className="danger-button" onClick={onConfirm}>确认结束并保存</button></div></section></div>;
+function ConfirmDialog({ title, body, cancelLabel = "继续对局", confirmLabel = "确认结束并保存", busy = false, error = "", onCancel, onConfirm }: { title: string; body: string; cancelLabel?: string; confirmLabel?: string; busy?: boolean; error?: string; onCancel: () => void; onConfirm: () => void }) {
+  const dialogRef = useModalDialog(busy ? undefined : onCancel);
+  return <dialog ref={dialogRef} className="confirm-modal" role="alertdialog" aria-labelledby="confirm-dialog-title" onCancel={(event) => { event.preventDefault(); if (!busy) onCancel(); }}><span className="warning-icon" aria-hidden="true">!</span><h2 id="confirm-dialog-title">{title}</h2><p>{body}</p>{error && <p className="form-message" role="alert">{error}</p>}<div className="modal-actions"><button className="secondary" disabled={busy} onClick={onCancel}>{busy ? "正在处理…" : cancelLabel}</button><button className="danger-button" disabled={busy} onClick={onConfirm}>{busy ? "正在处理…" : confirmLabel}</button></div></dialog>;
 }
 
 function DeleteMatchDialog({ label, players, time, busy, error, onCancel, onConfirm }: { label: string; players: string; time: string; busy: boolean; error: string; onCancel: () => void; onConfirm: () => void }) {
-  return <div className="modal-backdrop"><section className="confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-match-title"><span className="warning-icon" aria-hidden="true">!</span><h2 id="delete-match-title">删除这条战绩？</h2><p><b>{label}</b> · {players}<br /><small>{time}</small><br />删除后将从当前账号和本机战绩中移除；共享对局仍会为其他参与者保留。此操作不可恢复。</p>{error && <p className="form-message" role="alert">{error}</p>}<div className="modal-actions"><button className="secondary" disabled={busy} onClick={onCancel}>{busy ? "正在删除…" : "取消"}</button><button className="danger-button" disabled={busy} onClick={onConfirm}>确认删除</button></div></section></div>;
+  const dialogRef = useModalDialog(busy ? undefined : onCancel);
+  return <dialog ref={dialogRef} className="confirm-modal" role="alertdialog" aria-labelledby="delete-match-title" onCancel={(event) => { event.preventDefault(); if (!busy) onCancel(); }}><span className="warning-icon" aria-hidden="true">!</span><h2 id="delete-match-title">删除这条战绩？</h2><p><b>{label}</b> · {players}<br /><small>{time}</small><br />删除后将从当前账号和本机战绩中移除；共享对局仍会为其他参与者保留。此操作不可恢复。</p>{error && <p className="form-message" role="alert">{error}</p>}<div className="modal-actions"><button className="secondary" disabled={busy} onClick={onCancel}>{busy ? "正在删除…" : "取消"}</button><button className="danger-button" disabled={busy} onClick={onConfirm}>确认删除</button></div></dialog>;
 }
 
 function ActiveMatchProtectionDialog({ match, discardArmed, onContinue, onSave, onArmDiscard, onDiscard }: { match: BilliardsMatch; discardArmed: boolean; onContinue: () => void; onSave: () => void; onArmDiscard: () => void; onDiscard: () => void }) {
-  return <div className="modal-backdrop"><section className="confirm-modal protection-modal" role="alertdialog" aria-modal="true" aria-labelledby="protect-title"><span className="warning-icon" aria-hidden="true">!</span><h2 id="protect-title">发现未结束对局</h2><p>{match.players.map((player) => player.name).join("、")} 的对局仍在进行。新建前请选择如何处理，旧对局不会被静默覆盖。</p><div className="protection-actions"><button className="primary" onClick={onContinue}>继续当前对局</button><button className="secondary" onClick={onSave}>保存当前对局后新建</button>{discardArmed ? <button className="danger-button" onClick={onDiscard}>再次确认：放弃并新建</button> : <button className="text-button danger-text" onClick={onArmDiscard}>放弃旧对局…</button>}</div>{discardArmed && <small className="audit-note">确认后仍会保留可恢复快照和放弃时间。</small>}</section></div>;
+  const dialogRef = useModalDialog(onContinue);
+  return <dialog ref={dialogRef} className="confirm-modal protection-modal" role="alertdialog" aria-labelledby="protect-title" onCancel={(event) => { event.preventDefault(); onContinue(); }}><span className="warning-icon" aria-hidden="true">!</span><h2 id="protect-title">发现未结束对局</h2><p>{match.players.map((player) => player.name).join("、")} 的对局仍在进行。新建前请选择如何处理，旧对局不会被静默覆盖。</p><div className="protection-actions"><button className="primary" onClick={onContinue}>继续当前对局</button><button className="secondary" onClick={onSave}>保存当前对局后新建</button>{discardArmed ? <button className="danger-button" onClick={onDiscard}>再次确认：放弃并新建</button> : <button className="text-button danger-text" onClick={onArmDiscard}>放弃旧对局…</button>}</div>{discardArmed && <small className="audit-note">确认后仍会保留可恢复快照和放弃时间。</small>}</dialog>;
 }
 
 function StorageRecoveryDialog({ issue, onRetry, onReset }: { issue: StorageIssue; onRetry: () => void; onReset: () => void }) {
-  return <div className="modal-backdrop"><section className="confirm-modal protection-modal" role="alertdialog" aria-modal="true" aria-labelledby="recovery-title"><span className="warning-icon" aria-hidden="true">!</span><h2 id="recovery-title">本机数据无法读取</h2><p>原因：{issue.message}。为防止静默丢失，应用已暂停写入。你可以重试，或先备份原始数据再安全重置。</p><div className="protection-actions"><button className="primary" onClick={onRetry}>重试读取</button><button className="danger-button" onClick={onReset}>备份并安全重置</button></div></section></div>;
+  const dialogRef = useModalDialog();
+  return <dialog ref={dialogRef} className="confirm-modal protection-modal" role="alertdialog" aria-labelledby="recovery-title" onCancel={(event) => event.preventDefault()}><span className="warning-icon" aria-hidden="true">!</span><h2 id="recovery-title">本机数据无法读取</h2><p>原因：{issue.message}。为防止静默丢失，应用已暂停写入。你可以重试，或先备份原始数据再安全重置。</p><div className="protection-actions"><button className="primary" onClick={onRetry}>重试读取</button><button className="danger-button" onClick={onReset}>备份并安全重置</button></div></dialog>;
 }
 
 export default function GameApp() {
@@ -2081,6 +2250,7 @@ export default function GameApp() {
   const [path, setPath] = useState("/");
   const [setupMode, setSetupMode] = useState<MatchMode | null>(null);
   const [eightSetupOpen, setEightSetupOpen] = useState(false);
+  const [snookerSetupOpen, setSnookerSetupOpen] = useState(false);
   const [eightDefaultLayout, setEightDefaultLayout] = useState<EightBallLayout>("stacked");
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [pendingMode, setPendingMode] = useState<MatchMode | null>(null);
@@ -2088,7 +2258,7 @@ export default function GameApp() {
   const [storageIssue, setStorageIssue] = useState<StorageIssue | null>(null);
   const [status, setStatus] = useState("");
   const [deletedMatches, setDeletedMatches] = useState<string[]>([]);
-  const [deleteTarget, setDeleteTarget] = useState<{ kind: "eight"; match: EightBallMatch } | { kind: "legacy"; match: BilliardsMatch } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ kind: "eight"; match: EightBallMatch } | { kind: "snooker"; match: SnookerMatch } | { kind: "legacy"; match: BilliardsMatch } | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState("");
   const [theme, setTheme] = useState<ThemeMode>(() => typeof window !== "undefined" && browserStore().getRaw(APP_THEME_KEY) === "day" ? "day" : "night");
@@ -2268,12 +2438,13 @@ export default function GameApp() {
     // matchId/roomCode is restored there without creating anything new.
     setSetupMode(null);
     setEightSetupOpen(false);
+    setSnookerSetupOpen(false);
     navigate(`/room/${code}`);
     setStatus("云端实时房间已创建，已取得房间码");
   };
 
   const start = (draft: MatchDraft, scorePresets: ScorePreset[]) => {
-    if (data.activeMatch) return;
+    if (data.activeMatch || data.activeEightBallMatch || data.activeSnookerMatch) return;
     const match = createMatch(draft);
     setData({ ...data, activeMatch: match, savedRules: draft.rules, scorePresets });
     setSetupMode(null);
@@ -2288,6 +2459,7 @@ export default function GameApp() {
     setEightDefaultLayout(match.layout);
     setData((current) => ({ ...current, activeEightBallMatch: match }));
   };
+  const updateSnooker = (match: SnookerMatch) => setData((current) => ({ ...current, activeSnookerMatch: match }));
   const complete = () => {
     if (!data.activeMatch) return;
     const completed = finishMatch(data.activeMatch);
@@ -2306,8 +2478,17 @@ export default function GameApp() {
     setStatus("中八比赛已结束，完整逐局战绩已保存");
   };
 
+  const completeSnooker = () => {
+    if (!data.activeSnookerMatch) return;
+    const completed = recordSnookerCommand(data.activeSnookerMatch, { type: "snooker.finish" });
+    setData({ ...data, activeSnookerMatch: null, snookerHistory: [completed, ...data.snookerHistory] });
+    setConfirmEnd(false);
+    navigate(`/history/${completed.id}`);
+    setStatus("斯诺克比赛已结束，比分与单杆战绩已保存");
+  };
+
   const startEight = (draft: EightBallDraft) => {
-    if (data.activeMatch || data.activeEightBallMatch) return;
+    if (data.activeMatch || data.activeEightBallMatch || data.activeSnookerMatch) return;
     const match = createEightBallMatch(draft);
     browserStore().setRaw(EIGHT_BALL_LAYOUT_KEY, match.layout);
     setData({ ...data, activeEightBallMatch: match });
@@ -2318,12 +2499,26 @@ export default function GameApp() {
   };
 
   const openEightSetup = () => {
-    if (data.activeMatch || data.activeEightBallMatch) { setStatus("请先结束或保存当前对局，再创建中八比赛"); navigate("/"); return; }
+    if (data.activeMatch || data.activeEightBallMatch || data.activeSnookerMatch) { setStatus("请先结束当前对局，再创建中八比赛"); navigate("/"); return; }
     setEightSetupOpen(true);
   };
 
+  const startSnooker = (draft: SnookerDraft) => {
+    if (data.activeMatch || data.activeEightBallMatch || data.activeSnookerMatch) return;
+    setData({ ...data, activeSnookerMatch: createSnookerMatch(draft) });
+    setSnookerSetupOpen(false);
+    setActiveReadOnly(false);
+    navigate("/");
+    setStatus("斯诺克比赛已开始并保存到本机");
+  };
+
+  const openSnookerSetup = () => {
+    if (data.activeMatch || data.activeEightBallMatch || data.activeSnookerMatch) { setStatus("请先结束当前对局，再创建斯诺克比赛"); navigate("/"); return; }
+    setSnookerSetupOpen(true);
+  };
+
   const openSetup = (mode: MatchMode) => {
-    if (data.activeEightBallMatch) { setStatus("请先结束当前中八比赛，再创建其他对局"); navigate("/"); return; }
+    if (data.activeEightBallMatch || data.activeSnookerMatch) { setStatus("请先结束当前双人比赛，再创建其他对局"); navigate("/"); return; }
     if (data.activeMatch) {
       setPendingMode(mode);
       setDiscardArmed(false);
@@ -2380,8 +2575,13 @@ export default function GameApp() {
     setStatus("已退出账号；本机数据和待补传队列均已保留");
   };
 
-  const restoreCloudMatch = (match: BilliardsMatch | EightBallMatch, readOnly: boolean) => {
+  const restoreCloudMatch = (match: CloudMatchSnapshot, readOnly: boolean) => {
     setData((current) => {
+      if (isSnookerMatch(match)) {
+        return match.status === "completed"
+          ? { ...current, snookerHistory: [match, ...current.snookerHistory.filter((item) => item.id !== match.id)] }
+          : { ...current, activeSnookerMatch: match };
+      }
       if (isEightBallMatch(match)) {
         return match.status === "completed"
           ? { ...current, eightBallHistory: [match, ...current.eightBallHistory.filter((item) => item.id !== match.id)] }
@@ -2403,6 +2603,7 @@ export default function GameApp() {
       ...current,
       history: current.history.filter((match) => match.id !== id),
       eightBallHistory: current.eightBallHistory.filter((match) => match.id !== id),
+      snookerHistory: current.snookerHistory.filter((match) => match.id !== id),
     }));
     const store = browserStore();
     setDeletedMatches(addDeletedMatch(store, id));
@@ -2443,22 +2644,26 @@ export default function GameApp() {
   };
 
   const requestDelete = (id: string) => {
+    const snooker = data.snookerHistory.find((match) => match.id === id);
     const eight = data.eightBallHistory.find((match) => match.id === id);
     const legacy = data.history.find((match) => match.id === id);
     setDeleteError("");
+    if (snooker) { setDeleteTarget({ kind: "snooker", match: snooker }); return; }
     if (eight) { setDeleteTarget({ kind: "eight", match: eight }); return; }
     if (legacy) { setDeleteTarget({ kind: "legacy", match: legacy }); return; }
   };
 
   const page = (() => {
-    if (path === "/") return data.activeEightBallMatch
+    if (path === "/") return data.activeSnookerMatch
+      ? <div className={activeReadOnly ? "read-only-match" : ""}>{activeReadOnly && <section className="readonly-banner"><b>只读模式</b><span>请先在“我的”页面明确接管，再继续写入。</span></section>}<SnookerBoard match={data.activeSnookerMatch} onChange={activeReadOnly ? () => setStatus("只读模式不能修改") : updateSnooker} onFinish={() => !activeReadOnly && setConfirmEnd(true)} toast={setStatus} /></div>
+      : data.activeEightBallMatch
       ? <div className={activeReadOnly ? "read-only-match" : ""}>{activeReadOnly && <section className="readonly-banner"><b>只读模式</b><span>请先在“我的”页面明确接管，再继续写入。</span></section>}<EightBallBoard match={data.activeEightBallMatch} onChange={activeReadOnly ? () => setStatus("只读模式不能修改") : updateEight} onFinish={() => !activeReadOnly && setConfirmEnd(true)} toast={setStatus} /></div>
       : data.activeMatch
         ? <ActiveMatchView match={data.activeMatch} readOnly={activeReadOnly} onChange={activeReadOnly ? () => setStatus("只读模式不能修改") : updateActive} onFinish={() => setConfirmEnd(true)} toast={setStatus} />
         : <div className="home-stack">
-            <EmptyHome onStart={openSetup} onStartEight={openEightSetup} onNavigate={navigate} onResume={resumePaused} recent={data.history[0]} paused={data.pausedMatches} user={user} onEnterCloudRoom={enterCloudRoom} />
+            <EmptyHome onStart={openSetup} onStartEight={openEightSetup} onStartSnooker={openSnookerSetup} onNavigate={navigate} onResume={resumePaused} recent={data.history[0]} paused={data.pausedMatches} user={user} onEnterCloudRoom={enterCloudRoom} />
           </div>;
-    if (path === "/play") return <PlayPage onStart={openSetup} onStartEight={openEightSetup} />;
+    if (path === "/play") return <PlayPage onStart={openSetup} onStartEight={openEightSetup} onStartSnooker={openSnookerSetup} />;
     if (path === "/room" || path.startsWith("/room/")) {
       if (!user) return (
         <div className="room-page page-shell">
@@ -2474,8 +2679,10 @@ export default function GameApp() {
       const selectedId = path.split("/")[2];
       const selectedMatch = data.history.find((match) => match.id === selectedId);
       const selectedEight = data.eightBallHistory.find((match) => match.id === selectedId);
+      const selectedSnooker = data.snookerHistory.find((match) => match.id === selectedId);
+      if (selectedSnooker) return <SnookerHistoryReportDetail match={selectedSnooker} onBack={() => navigate("/history")} onDelete={requestDelete} />;
       if (selectedEight) return <EightBallHistoryDetail match={selectedEight} onBack={() => navigate("/history")} onDelete={requestDelete} />;
-      return <><UnifiedHistoryPage history={data.history} eightBallHistory={data.eightBallHistory} selectedId={selectedId} onSelect={(id) => navigate(id ? `/history/${id}` : "/history")} onDeleteMatch={requestDelete} />{selectedMatch && selectedMatch.scoreEvents.length > 0 && <HistoryCorrectionDock match={selectedMatch} onChange={(updated) => setData({ ...data, history: data.history.map((match) => match.id === updated.id ? updated : match) })} />}</>;
+      return <><UnifiedHistoryPage history={data.history} eightBallHistory={data.eightBallHistory} snookerHistory={data.snookerHistory} selectedId={selectedId} onSelect={(id) => navigate(id ? `/history/${id}` : "/history")} onDeleteMatch={requestDelete} />{selectedMatch && selectedMatch.scoreEvents.length > 0 && <HistoryCorrectionDock match={selectedMatch} onChange={(updated) => setData({ ...data, history: data.history.map((match) => match.id === updated.id ? updated : match) })} />}</>;
     }
     if (path === "/profile") return <ProfilePage history={data.history} user={user} authLoading={authLoading} sync={sync} onAuthenticated={(nextUser) => { setUser(nextUser); setStatus("账号已连接，正在检查离线队列"); }} onLogout={() => void logout()} onAccountDeleted={() => { setUser(null); setSync(LOCAL_SYNC_VIEW); setStatus("云端账号已删除；本机数据仍保留"); }} onRetrySync={() => void runSync(true)} ensureDevice={ensureDevice} onRestore={restoreCloudMatch} onNavigate={navigate} />;
     return <div className="large-empty page-shell"><span aria-hidden="true">404</span><h1>页面不存在</h1><SpaLink className="primary" href="/" navigate={navigate}>返回对局</SpaLink></div>;
@@ -2486,15 +2693,16 @@ export default function GameApp() {
   return (
     <div className="app-root">
       <a className="skip-link" href="#main-content">跳到主要内容</a>
-      <AppHeader path={path} active={!!data.activeMatch || !!data.activeEightBallMatch} user={user} sync={sync} theme={theme} onThemeChange={setTheme} onNavigate={navigate} />
+      <AppHeader path={path} active={!!data.activeMatch || !!data.activeEightBallMatch || !!data.activeSnookerMatch} user={user} sync={sync} theme={theme} onThemeChange={setTheme} onNavigate={navigate} />
       <main id="main-content" tabIndex={-1}>{page}</main>
       {setupMode && <SetupDialog initialMode={setupMode} savedRules={data.savedRules} scorePresets={data.scorePresets} onClose={() => setSetupMode(null)} onStart={start} user={user} onCloudRoomCreated={enterCloudRoom} />}
       {eightSetupOpen && <EightBallSetupDialog defaultLayout={eightDefaultLayout} onClose={() => setEightSetupOpen(false)} onStart={startEight} user={user} onCloudRoomCreated={enterCloudRoom} />}
-      {confirmEnd && <ConfirmDialog title="结束本场对局？" body="系统会保存最终结果、完整流水和更正记录。结束后仍可导出战绩。" onCancel={() => setConfirmEnd(false)} onConfirm={data.activeEightBallMatch ? completeEight : complete} />}
+      {snookerSetupOpen && <SnookerSetupDialog onClose={() => setSnookerSetupOpen(false)} onStart={startSnooker} user={user} onCloudRoomCreated={(code, matchId, operationId) => { if (matchId && operationId) recordDirectRoomLink(matchId, operationId); enterCloudRoom(code); }} />}
+      {confirmEnd && <ConfirmDialog title="结束本场对局？" body="系统会保存最终结果、完整流水和更正记录。" onCancel={() => setConfirmEnd(false)} onConfirm={data.activeSnookerMatch ? completeSnooker : data.activeEightBallMatch ? completeEight : complete} />}
       {deleteTarget && <DeleteMatchDialog
-        label={deleteTarget.kind === "eight" ? "中八双人赛" : deleteTarget.match.mode === "cards" ? "奇招牌" : deleteTarget.match.mode === "score_cards" ? "追分 + 奇招牌" : "多人追分"}
+        label={deleteTarget.kind === "snooker" ? "斯诺克" : deleteTarget.kind === "eight" ? "中八双人赛" : deleteTarget.match.mode === "cards" ? "奇招牌" : deleteTarget.match.mode === "score_cards" ? "追分 + 奇招牌" : "多人追分"}
         players={deleteTarget.match.players.map((player) => player.name).join(" · ")}
-        time={deleteTarget.kind === "eight" ? `${formatTime(deleteTarget.match.startedAt)} · ${durationLabel(eightBallElapsedMs(deleteTarget.match))}` : `${formatTime(deleteTarget.match.startedAt)} · ${formatDuration(deleteTarget.match.startedAt, deleteTarget.match.endedAt)}`}
+        time={deleteTarget.kind === "snooker" ? `${formatTime(deleteTarget.match.startedAt)} · ${durationLabel(snookerElapsedMs(deleteTarget.match))}` : deleteTarget.kind === "eight" ? `${formatTime(deleteTarget.match.startedAt)} · ${durationLabel(eightBallElapsedMs(deleteTarget.match))}` : `${formatTime(deleteTarget.match.startedAt)} · ${formatDuration(deleteTarget.match.startedAt, deleteTarget.match.endedAt)}`}
         busy={deleting}
         error={deleteError}
         onCancel={() => { setDeleteTarget(null); setDeleteError(""); }}

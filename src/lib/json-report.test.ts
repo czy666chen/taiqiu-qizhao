@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildPdf, parseMatchReport } from "./json-report";
+import { buildPdf, buildSnookerReport, parseMatchReport } from "./json-report";
+import { createSnookerMatch, recordSnookerCommand } from "./snooker";
 
 const scoreMatch = {
   version: 1 as const, id: "match-1", mode: "score" as const, status: "completed" as const,
@@ -16,6 +17,38 @@ describe("JSON 战绩报告", () => {
     expect(() => parseMatchReport(" ")).toThrow("请上传战绩 JSON");
     expect(() => parseMatchReport("{nope}")).toThrow("JSON 格式无效");
     expect(() => parseMatchReport('{"matches":[]}')).toThrow("未找到可导出的战绩");
+  });
+
+  it("读取斯诺克 JSON 并生成包含局分和单杆统计的 SVG", () => {
+    let match = createSnookerMatch({ playerNames: ["甲", "乙"], bestOf: 3, firstStriker: 0 }, 100);
+    match = recordSnookerCommand(match, { type: "snooker.pot.record", ball: "red" }, 101);
+    match = recordSnookerCommand(match, { type: "snooker.pot.record", ball: "black" }, 102);
+    const parsed = parseMatchReport(JSON.stringify({ exportVersion: 2, match }));
+    expect(parsed).toEqual(match);
+    const svg = buildSnookerReport(match, { time: true, trend: true, stats: true });
+    expect(svg).toContain("SNOOKER MATCH REPORT");
+    expect(svg).toContain("甲 0 : 乙 0");
+    expect(svg).toContain("最高单杆 8");
+    expect(svg).toContain("本场暂无 20+ 单杆");
+    expect(svg).not.toContain("事件流水");
+    const realtimeArchive = { ...match, realtimeArchive: { roomCode: "ABC123", version: 3 } };
+    expect(buildSnookerReport(realtimeArchive, { time: true, trend: true, stats: true })).toBe(svg);
+  });
+
+  it("用七色球圆形统计展示 20+ 单杆，不输出逐球事件", () => {
+    let match = createSnookerMatch({ playerNames: ["甲", "乙"], bestOf: 3, firstStriker: 0 }, 100);
+    for (let index = 0; index < 3; index += 1) {
+      match = recordSnookerCommand(match, { type: "snooker.pot.record", ball: "red" }, 101 + index * 2);
+      match = recordSnookerCommand(match, { type: "snooker.pot.record", ball: "black" }, 102 + index * 2);
+    }
+    const svg = buildSnookerReport(match, { time: true, trend: true, stats: true });
+    expect(svg).toContain("20+ 单杆球型");
+    expect(svg).toContain("24 分");
+    expect(svg.match(/data-ball=/g)).toHaveLength(7);
+    expect(svg).toContain('aria-label="红球 3 颗"');
+    expect(svg).toContain('aria-label="黑球 3 颗"');
+    expect(svg).not.toContain("事件流水");
+    expect(svg).not.toContain("进 红球");
   });
 
   it("生成包含多页引用的 PDF", () => {

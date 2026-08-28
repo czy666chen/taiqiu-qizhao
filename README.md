@@ -4,15 +4,18 @@
 [![Release](https://img.shields.io/github/v/release/czy666chen/taiqiu-qizhao)](https://github.com/czy666chen/taiqiu-qizhao/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-面向台球朋友局的开源 Web 应用，支持中八双人赛、2–8 人追分、奇招牌和基于 Cloudflare Durable Objects/WebSocket 的多人实时房间。当前正式版本为 `v6.0.0`。
+面向台球朋友局的开源 Web 应用，支持标准 15 红斯诺克、中八双人赛、2–8 人追分、奇招牌和基于 Cloudflare Durable Objects/WebSocket 的多人实时房间。当前版本为 `v6.1.0`。
 
 ## 功能
 
 - 中八逐局计分、赛制与开球规则、战绩导出
+- 斯诺克逐球计分、单杆与 147/155 路线、犯规/自由球/重置黑球、Best of 局分和实时房间
 - 多人追分、可配置规则、排名、撤销和统一流水
-- 独立奇招牌、手牌隐私、抽取/使用/跳过与下一轮重发
+- 独立奇招牌、斯诺克兼容白名单、手牌隐私、抽取/使用/跳过与下一轮重发
 - 账号、跨设备同步、云端战绩和实时房间
-- 离线本地存储、深浅主题和移动端布局
+- 离线本地存储、JSON/长图/PDF 数据导出、深浅主题和移动端布局
+
+斯诺克本机模式可完全离线使用。登录后才会同步云端；实时房间中的房主、玩家和观战者按角色获得不同权限，其他玩家的私有手牌不会出现在其快照中。账户页可导出或删除云端数据，战绩页可导出单场 JSON、长图和 PDF。启用奇招牌的斯诺克对局会明确标为变体局。
 
 ## 技术栈
 

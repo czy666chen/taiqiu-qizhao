@@ -1,8 +1,8 @@
 import type { AuthEnv } from "../auth/api";
 import { requireMatchRead, requireMatchWriteLease, requireSession } from "./authorization";
 import { findSession } from "../auth/session";
-import { CARD_DEFINITIONS, getCardSafetyLevel } from "../../src/data/cards";
-import { DECK_LIMITS, type CardSafetyLevel, type DeckSnapshot, type DeckSnapshotCard } from "../../src/lib/custom-decks";
+import { CARD_DEFINITIONS, getCardSafetyLevel, type SupportedGame } from "../../src/data/cards";
+import { DECK_LIMITS, parseDeckSnapshot, type CardSafetyLevel, type DeckSnapshot, type DeckSnapshotCard } from "../../src/lib/custom-decks";
 
 const MAX_JSON_BYTES = 64 * 1024;
 const LEASE_DURATION_MS = 15 * 60 * 1000;
@@ -195,10 +195,23 @@ function safetyLevel(value: unknown): CardSafetyLevel {
   return value;
 }
 
+function supportedGames(value: unknown): SupportedGame[] {
+  if (value === undefined) return ["chinese_eight"];
+  if (!Array.isArray(value) || value.some((game) => game !== "chinese_eight" && game !== "snooker")) {
+    throw new BusinessValidationError("supportedGames 无效");
+  }
+  return Array.from(new Set(["chinese_eight" as const, ...value]));
+}
+
+const customCardResult = (row: Record<string, unknown>) => ({
+  ...row,
+  supportedGames: ["chinese_eight", ...(Number(row.supports_snooker) ? ["snooker"] : [])],
+});
+
 async function cardCatalog(request: Request, env: AuthEnv): Promise<Response> {
   const session = await findSession(env, request);
   const custom = session ? await env.DB.prepare(
-    `SELECT id, title, effect, default_quantity, safety_level, safety_note, created_at, updated_at
+    `SELECT id, title, effect, default_quantity, safety_level, safety_note, supports_snooker, created_at, updated_at
        FROM custom_cards
       WHERE owner_user_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC`,
   ).bind(session.user.id).all() : { results: [] };
@@ -210,19 +223,21 @@ async function cardCatalog(request: Request, env: AuthEnv): Promise<Response> {
       effect: card.effect,
       count: card.count,
       safetyLevel: getCardSafetyLevel(card),
+      supportedGames: card.supportedGames,
+      ruleImpact: card.ruleImpact,
       ...(card.safetyNote ? { safetyNote: card.safetyNote } : {}),
     })),
-    customCards: custom.results,
+    customCards: custom.results.map((row) => customCardResult(row as Record<string, unknown>)),
   });
 }
 
 async function listCustomCards(request: Request, env: AuthEnv): Promise<Response> {
   const session = await requireSession(env, request);
   const result = await env.DB.prepare(
-    `SELECT id, title, effect, default_quantity, safety_level, safety_note, created_at, updated_at
+    `SELECT id, title, effect, default_quantity, safety_level, safety_note, supports_snooker, created_at, updated_at
        FROM custom_cards WHERE owner_user_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC`,
   ).bind(session.user.id).all();
-  return json({ customCards: result.results });
+  return json({ customCards: result.results.map((row) => customCardResult(row as Record<string, unknown>)) });
 }
 
 function customCardFields(body: Record<string, unknown>) {
@@ -236,6 +251,7 @@ function customCardFields(body: Record<string, unknown>) {
     defaultQuantity,
     safetyLevel: safetyLevel(body.safetyLevel ?? "low"),
     safetyNote: trimmedString(body, "safetyNote", DECK_LIMITS.safetyNote, true) ?? null,
+    supportedGames: supportedGames(body.supportedGames),
   };
 }
 
@@ -251,9 +267,9 @@ async function createCustomCard(request: Request, env: AuthEnv): Promise<Respons
   const card = { id: crypto.randomUUID(), ...fields, createdAt: Date.now(), updatedAt: Date.now() };
   await env.DB.prepare(
     `INSERT INTO custom_cards
-      (id, owner_user_id, title, effect, default_quantity, safety_level, safety_note, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)`,
-  ).bind(card.id, session.user.id, fields.title, fields.effect, fields.defaultQuantity, fields.safetyLevel, fields.safetyNote, card.createdAt).run();
+      (id, owner_user_id, title, effect, default_quantity, safety_level, safety_note, supports_snooker, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)`,
+  ).bind(card.id, session.user.id, fields.title, fields.effect, fields.defaultQuantity, fields.safetyLevel, fields.safetyNote, fields.supportedGames.includes("snooker") ? 1 : 0, card.createdAt).run();
   return json({ customCard: card }, 201);
 }
 
@@ -264,9 +280,9 @@ async function updateCustomCard(request: Request, env: AuthEnv, id: string): Pro
   const updatedAt = Date.now();
   const result = await env.DB.prepare(
     `UPDATE custom_cards SET title = ?1, effect = ?2, default_quantity = ?3,
-       safety_level = ?4, safety_note = ?5, updated_at = ?6
-     WHERE id = ?7 AND owner_user_id = ?8 AND deleted_at IS NULL`,
-  ).bind(fields.title, fields.effect, fields.defaultQuantity, fields.safetyLevel, fields.safetyNote, updatedAt, id, session.user.id).run();
+       safety_level = ?4, safety_note = ?5, supports_snooker = ?6, updated_at = ?7
+     WHERE id = ?8 AND owner_user_id = ?9 AND deleted_at IS NULL`,
+  ).bind(fields.title, fields.effect, fields.defaultQuantity, fields.safetyLevel, fields.safetyNote, fields.supportedGames.includes("snooker") ? 1 : 0, updatedAt, id, session.user.id).run();
   if ((result.meta.changes ?? 0) !== 1) return json({ error: "自定义卡牌不存在" }, 404);
   return json({ customCard: { id, ...fields, updatedAt } });
 }
@@ -282,7 +298,7 @@ async function deleteCustomCard(request: Request, env: AuthEnv, id: string): Pro
   return json({ deleted: true, id });
 }
 
-type CustomCardRow = { id: string; title: string; effect: string; safety_level: CardSafetyLevel; safety_note: string | null };
+type CustomCardRow = { id: string; title: string; effect: string; safety_level: CardSafetyLevel; safety_note: string | null; supports_snooker: number };
 
 async function canonicalDeckSnapshot(env: AuthEnv, userId: string, body: Record<string, unknown>): Promise<DeckSnapshot> {
   const name = trimmedString(body, "name", DECK_LIMITS.deckName)!;
@@ -310,13 +326,16 @@ async function canonicalDeckSnapshot(env: AuthEnv, userId: string, body: Record<
   }
   const customIds = requested.filter((card) => card.source === "custom").map((card) => card.definitionId);
   const customRows = customIds.length ? await env.DB.prepare(
-    `SELECT id, title, effect, safety_level, safety_note FROM custom_cards
+    `SELECT id, title, effect, safety_level, safety_note, supports_snooker FROM custom_cards
       WHERE owner_user_id = ?1 AND deleted_at IS NULL AND id IN (${customIds.map((_, index) => `?${index + 2}`).join(",")})`,
   ).bind(userId, ...customIds).all<CustomCardRow>() : { results: [] as CustomCardRow[] };
   const customById = new Map(customRows.results.map((card) => [card.id, card]));
   if (customById.size !== customIds.length) throw new BusinessValidationError("自定义卡牌不存在或不属于当前账号");
   const cards: DeckSnapshotCard[] = requested.map((card): DeckSnapshotCard => {
-    if (card.source === "official") return { source: "official", definitionId: card.definitionId, quantity: card.quantity };
+    if (card.source === "official") {
+      const definition = CARD_DEFINITIONS.find((item) => item.id === card.definitionId)!;
+      return { source: "official", definitionId: card.definitionId, quantity: card.quantity, supportedGames: [...definition.supportedGames] };
+    }
     const custom = customById.get(card.definitionId)!;
     return {
       source: "custom",
@@ -327,10 +346,11 @@ async function canonicalDeckSnapshot(env: AuthEnv, userId: string, body: Record<
         effect: custom.effect,
         safetyLevel: custom.safety_level,
         ...(custom.safety_note ? { safetyNote: custom.safety_note } : {}),
+        supportedGames: ["chinese_eight", ...(custom.supports_snooker ? ["snooker" as const] : [])],
       },
     };
   });
-  return { formatVersion: 1, name, cards };
+  return { formatVersion: 2, name, cards };
 }
 
 async function findDeckOperation(env: AuthEnv, userId: string, operationId: string) {
@@ -381,7 +401,7 @@ async function getDeckResource(request: Request, env: AuthEnv, id: string): Prom
        FROM decks d LEFT JOIN deck_versions dv ON dv.deck_id = d.id AND dv.version_no = d.current_version
       WHERE d.id = ?1 AND d.owner_user_id = ?2 AND d.deleted_at IS NULL`,
   ).bind(id, session.user.id).first<{ id: string; name: string; current_version: number; updated_at: number; snapshot_json: string | null }>();
-  return row ? json({ deck: { id: row.id, name: row.name, currentVersion: row.current_version, updatedAt: row.updated_at, snapshot: row.snapshot_json ? JSON.parse(row.snapshot_json) : null } }) : json({ error: "牌组不存在" }, 404);
+  return row ? json({ deck: { id: row.id, name: row.name, currentVersion: row.current_version, updatedAt: row.updated_at, snapshot: row.snapshot_json ? parseDeckSnapshot(JSON.parse(row.snapshot_json)) : null } }) : json({ error: "牌组不存在" }, 404);
 }
 
 async function saveDeckResource(request: Request, env: AuthEnv, id: string): Promise<Response> {

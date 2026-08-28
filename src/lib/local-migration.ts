@@ -1,5 +1,6 @@
 import type { EightBallMatch } from "./eight-ball";
 import type { BilliardsMatch, MatchCardState } from "./match";
+import type { SnookerMatch } from "./snooker";
 import {
   AppData,
   APP_STORAGE_KEY,
@@ -49,7 +50,7 @@ async function stableUuid(namespace: string, localId: string): Promise<string> {
   return `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`;
 }
 
-function collectMatches(data: AppData): (BilliardsMatch | EightBallMatch)[] {
+function collectMatches(data: AppData): (BilliardsMatch | EightBallMatch | SnookerMatch)[] {
   const candidates = [
     data.activeMatch,
     ...data.history,
@@ -57,11 +58,13 @@ function collectMatches(data: AppData): (BilliardsMatch | EightBallMatch)[] {
     ...data.recoverySnapshots.map((item) => item.match),
     data.activeEightBallMatch,
     ...data.eightBallHistory,
-  ].filter((match): match is BilliardsMatch | EightBallMatch => match !== null);
+    data.activeSnookerMatch,
+    ...data.snookerHistory,
+  ].filter((match): match is BilliardsMatch | EightBallMatch | SnookerMatch => match !== null);
   return [...new Map(candidates.map((match) => [match.id, match])).values()];
 }
 
-function collectDecks(matches: (BilliardsMatch | EightBallMatch)[]) {
+function collectDecks(matches: (BilliardsMatch | EightBallMatch | SnookerMatch)[]) {
   const decks = new Map<string, MatchCardState["deckSnapshot"]>();
   for (const match of matches) {
     if ("cards" in match && match.cards?.deckSnapshot) {
@@ -72,7 +75,7 @@ function collectDecks(matches: (BilliardsMatch | EightBallMatch)[]) {
   return [...decks.entries()].map(([localId, snapshot]) => ({ localId, snapshot }));
 }
 
-function playerNames(matches: (BilliardsMatch | EightBallMatch)[]): string[] {
+function playerNames(matches: (BilliardsMatch | EightBallMatch | SnookerMatch)[]): string[] {
   const names = new Map<string, string>();
   for (const match of matches) {
     for (const player of match.players) {

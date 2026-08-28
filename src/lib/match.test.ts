@@ -43,11 +43,11 @@ describe("追分对局", () => {
       cardMode: "independent",
       initialHandSize: 1,
       deckSnapshot: {
-        formatVersion: 1,
+        formatVersion: 2,
         name: "周五朋友局",
         cards: [
-          { source: "official", definitionId: "card-001", quantity: 1 },
-          { source: "custom", definitionId: "custom-1", quantity: 1, snapshot: { title: "再来一杆", effect: "再打一杆", safetyLevel: "low" } },
+          { source: "official", definitionId: "card-001", quantity: 1, supportedGames: ["chinese_eight", "snooker"] },
+          { source: "custom", definitionId: "custom-1", quantity: 1, snapshot: { title: "再来一杆", effect: "再打一杆", safetyLevel: "low", supportedGames: ["chinese_eight"] } },
         ],
       },
     }, 100, first);

@@ -1,6 +1,7 @@
-import { createDeck, secureRandomIndex, type CardInstance } from "../../src/lib/deck";
+import { secureRandomIndex, type CardInstance } from "../../src/lib/deck";
 import { getOfficialDeck, type OfficialDeckId } from "../../src/lib/official-decks";
-import { deckSnapshotInstances, type DeckSnapshot } from "../../src/lib/custom-decks";
+import { deckSnapshotInstances, filterDeckSnapshotForGame, officialDeckSnapshot, parseDeckSnapshot, type DeckSnapshot } from "../../src/lib/custom-decks";
+import type { SupportedGame } from "../../src/data/cards";
 import type { JsonObject, JsonValue } from "./chase-scoring";
 
 export type RoomCardMode = "none" | "independent";
@@ -24,6 +25,10 @@ export type RoomCardState = {
     definitionIds: string[];
     cardCount: number;
     source?: "official" | "user";
+    game?: SupportedGame;
+    originalCardCount?: number;
+    excludedForGameCount?: number;
+    snapshot?: DeckSnapshot;
   };
   remaining: CardInstance[];
   used: CardInstance[];
@@ -90,11 +95,18 @@ export function initRoomCards(input: {
   playerIds: string[];
   handSizes: number[];
   randomIndex?: typeof secureRandomIndex;
+  game?: SupportedGame;
 }): RoomCardState {
   const officialDeck = getOfficialDeck(input.deckId);
-  let remaining = input.deckSnapshot
-    ? deckSnapshotInstances(input.deckSnapshot)
-    : createDeck().filter((card) => officialDeck.definitionIds.includes(card.definitionId));
+  const game = input.game ?? "chinese_eight";
+  const parsedSnapshot = input.deckSnapshot ? parseDeckSnapshot(input.deckSnapshot) : undefined;
+  if (input.deckSnapshot && !parsedSnapshot) throw new Error("牌组快照无效");
+  const complete = officialDeckSnapshot(officialDeck.name);
+  const sourceSnapshot = parsedSnapshot ?? { ...complete, cards: complete.cards.filter((card) => officialDeck.definitionIds.includes(card.definitionId)) };
+  const filtered = filterDeckSnapshotForGame(sourceSnapshot, game);
+  let remaining = deckSnapshotInstances(filtered.snapshot);
+  const requestedTotal = input.playerIds.reduce((sum, _, index) => sum + Math.max(0, Math.min(MAX_HAND_SIZE, Math.trunc(input.handSizes[index] ?? input.handSizes[0] ?? 0))), 0);
+  if (game === "snooker" && requestedTotal > remaining.length) throw new Error("斯诺克兼容牌不足以发放初始手牌");
   const cardCount = remaining.length;
   const hands: Record<string, CardInstance[]> = {};
   const initialHandSizes: Record<string, number> = {};
@@ -107,14 +119,18 @@ export function initRoomCards(input: {
   });
   return {
     mode: "independent",
-    deckId: input.deckSnapshot ? "user" : officialDeck.id,
+    deckId: parsedSnapshot ? "user" : officialDeck.id,
     deckSnapshot: {
-      id: input.deckSnapshot ? "user" : officialDeck.id,
-      version: input.deckSnapshot?.formatVersion ?? officialDeck.version,
-      name: input.deckSnapshot?.name ?? officialDeck.name,
+      id: parsedSnapshot ? "user" : officialDeck.id,
+      version: parsedSnapshot?.formatVersion ?? officialDeck.version,
+      name: parsedSnapshot?.name ?? officialDeck.name,
       definitionIds: Array.from(new Set(remaining.map((card) => card.definitionId))),
       cardCount,
-      source: input.deckSnapshot ? "user" : "official",
+      source: parsedSnapshot ? "user" : "official",
+      game,
+      originalCardCount: filtered.originalCount,
+      excludedForGameCount: filtered.excludedCount,
+      snapshot: filtered.snapshot,
     },
     remaining,
     used: [],

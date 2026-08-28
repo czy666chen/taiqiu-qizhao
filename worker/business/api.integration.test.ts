@@ -131,6 +131,7 @@ describe("R3 business authorization and cloud APIs", () => {
       effect: "本回合未进球时可以再击打一杆。",
       defaultQuantity: 2,
       safetyLevel: "low",
+      supportedGames: ["chinese_eight", "snooker"],
     });
     expect(cardResponse.status).toBe(201);
     const card = (await cardResponse.json() as { customCard: { id: string } }).customCard;
@@ -173,8 +174,10 @@ describe("R3 business authorization and cloud APIs", () => {
     expect((await api(`/api/custom-cards/${card.id}`, owner.cookie, {
       method: "DELETE", headers: { Origin: "http://example.com" },
     })).status).toBe(200);
-    const detail = await (await api(`/api/decks/${deck.id}`, owner.cookie)).json() as { deck: { snapshot: { cards: Array<{ snapshot?: { title: string } }> } } };
+    const detail = await (await api(`/api/decks/${deck.id}`, owner.cookie)).json() as { deck: { snapshot: { formatVersion: number; cards: Array<{ snapshot?: { title: string; supportedGames: string[] } }> } } };
+    expect(detail.deck.snapshot.formatVersion).toBe(2);
     expect(detail.deck.snapshot.cards[1].snapshot?.title).toBe("再来一杆");
+    expect(detail.deck.snapshot.cards[1].snapshot?.supportedGames).toContain("snooker");
   });
 
   it("imports local resources idempotently and scopes stable local IDs per account", async () => {

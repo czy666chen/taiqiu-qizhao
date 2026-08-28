@@ -2,7 +2,7 @@ import { expect, Page, test } from "@playwright/test";
 
 async function createScoreMatch(page: Page, playerCount = 2) {
   await page.goto("/");
-  await page.getByRole("button", { name: /开始追分局/ }).click();
+  await page.getByRole("button", { name: /多人追分/ }).click();
   for (let index = 2; index < playerCount; index += 1) {
     await page.getByRole("button", { name: /添加临时玩家/ }).click();
   }
@@ -10,6 +10,53 @@ async function createScoreMatch(page: Page, playerCount = 2) {
   await page.getByRole("button", { name: /确认并开始/ }).click();
   await expect(page.locator(".live-label")).toHaveText(/对局进行中/);
 }
+
+test("斯诺克本机计分可形成 31+ 单杆、判罚并刷新恢复", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /标准斯诺克/ }).click();
+  await page.getByLabel("斯诺克玩家 1 姓名").fill("小丁");
+  await page.getByLabel("斯诺克玩家 2 姓名").fill("小特");
+  await page.getByRole("button", { name: "自定义", exact: true }).click();
+  await page.getByLabel("每局红球数").fill("6");
+  await page.getByRole("button", { name: /确认并开始/ }).click();
+  await expect(page.getByLabel("第 1 小局比分")).toBeVisible();
+  await expect(page.locator(".snooker-frame-scoreboard article").nth(0).locator("strong")).toHaveText("0");
+
+  for (let index = 0; index < 4; index += 1) {
+    await page.locator(".snooker-ball.red").click();
+    await page.locator(".snooker-ball.black").click();
+  }
+  await expect(page.getByText("当前单杆 32", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("红球打进 4 个")).toBeVisible();
+  await expect(page.getByLabel("黑球打进 4 个")).toBeVisible();
+  await expect(page.getByText(/147 路线/)).toHaveCount(0);
+  await expect(page.locator(".snooker-frame-scoreboard article").nth(0).locator("strong")).toHaveText("32");
+
+  await page.reload();
+  await expect(page.getByText("当前单杆 32", { exact: true })).toBeVisible();
+  await page.locator(".snooker-foul").click();
+  await page.getByRole("group", { name: "犯规罚分给小特" }).getByRole("button", { name: "+4" }).click();
+  await expect(page.locator(".snooker-frame-scoreboard article").nth(1).locator("strong")).toHaveText("4");
+  await page.getByRole("button", { name: "撤销上一事件" }).click();
+  await expect(page.locator(".snooker-frame-scoreboard article").nth(1).locator("strong")).toHaveText("0");
+});
+
+test("玩法四卡布局与标准斯诺克设置在视口内稳定显示", async ({ page }) => {
+  await page.goto("/");
+  await page.goto("/play");
+  const modeCards = page.locator(".mode-card");
+  await expect(modeCards).toHaveCount(4);
+  const cardWidths = await modeCards.evaluateAll((cards) => cards.map((card) => card.getBoundingClientRect().width));
+  expect(cardWidths.every((width) => width >= 280)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
+
+  await page.getByRole("button", { name: /开始标准斯诺克/ }).click();
+  await expect(page.getByRole("button", { name: "标准 15 红" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("每局红球数", { exact: true })).toHaveCount(0);
+  const bodyBottom = await page.locator(".snooker-setup .setup-body").evaluate((element) => element.getBoundingClientRect().bottom);
+  const footerTop = await page.locator(".snooker-setup .modal-actions").evaluate((element) => element.getBoundingClientRect().top);
+  expect(bodyBottom).toBeLessThanOrEqual(footerTop + 1);
+});
 
 test.describe("追分核心流程", () => {
   for (const playerCount of [2, 4, 8]) {
@@ -164,7 +211,7 @@ test("R2.5 中八建局、逐局录入、布局切换、恢复与战绩导出", 
 
 test("奇招牌抽取、使用、安全跳过和刷新恢复", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("link", { name: "玩法" }).click();
+  await page.goto("/play");
   await page.getByRole("button", { name: "查看并开始" }).click();
   await page.getByRole("button", { name: /全量牌库/ }).click();
   await page.getByRole("button", { name: /下一步：确认规则/ }).click();
@@ -182,7 +229,7 @@ test("奇招牌抽取、使用、安全跳过和刷新恢复", async ({ page }) 
 
 test("未结束对局可保存后新建并恢复", async ({ page }) => {
   await createScoreMatch(page, 2);
-  await page.getByRole("link", { name: "玩法" }).click();
+  await page.goto("/play");
   await page.getByRole("button", { name: /开始设置/ }).click();
   await expect(page.getByRole("heading", { name: "发现未结束对局" })).toBeVisible();
   await page.getByRole("button", { name: "保存当前对局后新建" }).click();
@@ -195,7 +242,7 @@ test("未结束对局可保存后新建并恢复", async ({ page }) => {
 
 test("R2 玩家可独立设分、中途加入、调整顺序并保留离场记录", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: /开始追分局/ }).click();
+  await page.getByRole("button", { name: /多人追分/ }).click();
   await page.getByLabel("玩家 B初始积分").fill("30");
   await page.getByRole("button", { name: /添加临时玩家/ }).click();
   await page.getByRole("button", { name: /下一步：确认规则/ }).click();
@@ -231,7 +278,7 @@ test("R2 转账计分由每名输家支付固定分数", async ({ page }) => {
 
 test("R2 高级抽牌与牌分联动可撤销并进入统一历史", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("link", { name: "玩法" }).click();
+  await page.goto("/play");
   await page.getByRole("button", { name: "同时加入奇招牌" }).click();
   await page.getByLabel("自动补牌策略").selectOption("after_play");
   await page.getByLabel("卡牌最高安全等级").selectOption("low");
@@ -261,7 +308,7 @@ test("R2 高级抽牌与牌分联动可撤销并进入统一历史", async ({ pa
 
 test("14710 默认预设允许清空分值后重新输入", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: /开始追分局/ }).click();
+  await page.getByRole("button", { name: /多人追分/ }).click();
   await expect(page.getByLabel("计分预设")).toHaveValue("builtin-14710");
   await expect(page.getByLabel("犯规分值")).toHaveValue("1");
   await expect(page.getByLabel("普胜分值")).toHaveValue("4");
@@ -279,7 +326,7 @@ test("损坏的本机数据不会被静默覆盖", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "本机数据无法读取" })).toBeVisible();
   await page.getByRole("button", { name: "备份并安全重置" }).click();
-  await expect(page.getByRole("heading", { name: /今晚这桌/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /朋友到齐/ })).toBeVisible();
   const keys = await page.evaluate(() => Object.keys(localStorage));
   expect(keys.some((key) => key.includes(":corrupt-backup:"))).toBe(true);
 });

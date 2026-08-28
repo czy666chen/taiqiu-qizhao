@@ -1,7 +1,7 @@
-import { CardInstance, createDeck, secureRandomIndex } from "./deck";
+import { CardInstance, secureRandomIndex } from "./deck";
 import { getOfficialDeck, OfficialDeckId } from "./official-decks";
-import { CARD_DEFINITIONS, CardCategory, CardSafetyLevel, getCardCategory, getCardSafetyLevel } from "../data/cards";
-import { deckSnapshotInstances, type DeckSnapshot, type DeckSnapshotCard } from "./custom-decks";
+import { CARD_DEFINITIONS, CardCategory, CardSafetyLevel, getCardCategory, getCardSafetyLevel, type SupportedGame } from "../data/cards";
+import { deckSnapshotInstances, filterDeckSnapshotForGame, officialDeckSnapshot, parseDeckSnapshot, type DeckSnapshot, type DeckSnapshotCard } from "./custom-decks";
 
 export type MatchMode = "cards" | "score" | "score_cards";
 export type CardMode = "none" | "shared" | "independent";
@@ -98,6 +98,10 @@ export interface MatchCardState {
     cardCount: number;
     source?: "official" | "user";
     filter?: MatchCardFilter;
+    game?: SupportedGame;
+    originalCardCount?: number;
+    excludedForGameCount?: number;
+    snapshot?: DeckSnapshot;
   };
 }
 
@@ -208,16 +212,27 @@ export interface MatchCardStateDraft {
   cardHandLimit?: number;
   cardExhaustionPolicy?: DeckExhaustionPolicy;
   cardFilter?: Partial<MatchCardFilter>;
+  game?: SupportedGame;
 }
 
 export function createMatchCardState(draft: MatchCardStateDraft, randomIndex = secureRandomIndex): MatchCardState {
   const officialDeck = getOfficialDeck(draft.deckId);
   const filter = normalizeCardFilter(draft.cardFilter);
+  const game = draft.game ?? "chinese_eight";
+  const parsedSnapshot = draft.deckSnapshot ? parseDeckSnapshot(draft.deckSnapshot) : undefined;
+  if (draft.deckSnapshot && !parsedSnapshot) throw new Error("牌组快照无效");
   const handIds = draft.cardMode === "shared" ? ["shared"] : draft.handIds;
-  let remaining = draft.deckSnapshot
-    ? deckSnapshotInstances({ ...draft.deckSnapshot, cards: draft.deckSnapshot.cards.filter((card) => snapshotCardAllowed(card, filter)) })
-    : createDeck().filter((card) => officialDeck.definitionIds.includes(card.definitionId) && cardAllowed(card.definitionId, filter));
+  const sourceSnapshot = parsedSnapshot ?? {
+    ...officialDeckSnapshot(officialDeck.name),
+    cards: officialDeckSnapshot(officialDeck.name).cards.filter((card) => officialDeck.definitionIds.includes(card.definitionId)),
+  };
+  const gameFilter = filterDeckSnapshotForGame(sourceSnapshot, game);
+  let remaining = deckSnapshotInstances({ ...gameFilter.snapshot, cards: gameFilter.snapshot.cards.filter((card) => snapshotCardAllowed(card, filter)) });
   const hands: Record<string, CardInstance[]> = {};
+  const requestedTotal = draft.cardMode === "shared"
+    ? Math.max(0, Math.trunc(draft.initialHandSize))
+    : handIds.reduce((sum, _, index) => sum + Math.max(0, Math.trunc(draft.initialHandSizes?.[index] ?? draft.initialHandSize)), 0);
+  if (game === "snooker" && requestedTotal > remaining.length) throw new Error("斯诺克兼容牌不足以发放初始手牌");
   const perHandMax = draft.cardMode === "shared" ? remaining.length : Math.floor(remaining.length / Math.max(1, handIds.length));
   const uniformSize = Math.max(0, Math.trunc(draft.initialHandSize));
   for (const [index, handId] of handIds.entries()) {
@@ -247,12 +262,16 @@ export function createMatchCardState(draft: MatchCardStateDraft, randomIndex = s
     filter,
     deckSnapshot: {
       id: draft.deckSnapshot ? "user" : officialDeck.id,
-      version: draft.deckSnapshot?.formatVersion ?? officialDeck.version,
-      name: draft.deckSnapshot?.name ?? officialDeck.name,
-      source: draft.deckSnapshot ? "user" : "official",
+      version: parsedSnapshot?.formatVersion ?? officialDeck.version,
+      name: parsedSnapshot?.name ?? officialDeck.name,
+      source: parsedSnapshot ? "user" : "official",
       definitionIds: Array.from(new Set(remaining.concat(...Object.values(hands)).map((card) => card.definitionId))),
       cardCount: remaining.length + Object.values(hands).reduce((sum, hand) => sum + hand.length, 0),
       filter: { ...filter, excludedCategories: [...filter.excludedCategories], excludedKeywords: [...filter.excludedKeywords] },
+      game,
+      originalCardCount: gameFilter.originalCount,
+      excludedForGameCount: gameFilter.excludedCount,
+      snapshot: gameFilter.snapshot,
     },
   };
 }

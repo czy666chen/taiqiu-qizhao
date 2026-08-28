@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("追分和中八的起始手牌都可设为 0", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: /开始追分局/ }).click();
+  await page.getByRole("button", { name: /多人追分/ }).click();
   await page.getByRole("button", { name: "独立手牌" }).click();
   await page.getByLabel("追分每人起始手牌").fill("");
   await expect(page.getByLabel("追分每人起始手牌")).toHaveValue("");
@@ -31,7 +31,7 @@ test("浏览器拒绝 localStorage 时仍能进入首页", async ({ page }) => {
     }
   });
   await page.goto("/");
-  await expect(page.getByRole("button", { name: /开始追分局/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /多人追分/ })).toBeVisible();
   await expect(page.locator(".loading-screen")).toHaveCount(0);
 });
 
