@@ -1,7 +1,6 @@
 "use client";
 
 import { type MouseEvent, useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import {
   addTeamBattlePlayer,
   correctTeamBattleRound,
@@ -237,7 +236,9 @@ export function TeamBattleHistoryDetail({ match, onBack, onDelete }: { match: Te
   const playerName = (id: string) => match.players.find((player) => player.id === id)?.name ?? id;
 
   return <div className="content-page page-shell team-battle-history">
-    <Link className="back-link" href="/history" onClick={(event) => handleHistoryBack(event, onBack)}>← 返回战绩</Link>
+    {/* The standalone Vite SPA cannot bundle next/link; this handler keeps navigation client-side. */}
+    {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+    <a className="back-link" href="/history" onClick={(event) => handleHistoryBack(event, onBack)}>← 返回战绩</a>
     <header className="page-title split"><div><p className="kicker">TEAM BATTLE · MATCH REPORT</p><h1>{match.title || "团战结算"}</h1><p>{new Date(match.startedAt).toLocaleString("zh-CN")} · {durationLabel(teamBattleElapsedMs(match, match.endedAt))}{match.location ? ` · ${match.location}` : ""}</p></div>
       <div className="report-actions team-report-actions"><div className="team-report-options" aria-label="报告设置"><label><span>报告范围</span><select value={scope.kind === "all" ? "all" : scope.playerId} onChange={(event) => setScope(event.target.value === "all" ? { kind: "all" } : { kind: "player", playerId: event.target.value })}><option value="all">整场团战</option>{match.players.map((player) => <option key={player.id} value={player.id}>{player.name}</option>)}</select></label><label><span>报告内容</span><select value={detail} onChange={(event) => setDetail(event.target.value as "auto" | "summary")}><option value="auto">自动详情</option><option value="summary">仅摘要</option></select></label></div><div className="export-actions"><button disabled={!!exporting} onClick={() => void exportFile("png")}>{exporting === "png" ? "生成中…" : "下载 PNG 长图"}</button><button disabled={!!exporting} onClick={() => void exportFile("pdf")}>{exporting === "pdf" ? "生成中…" : "下载 PDF"}</button></div><div className="export-actions minor"><button disabled={!!exporting} onClick={exportJson}>JSON 备份</button><button className="danger-text" onClick={() => onDelete(match.id)}>删除战绩</button></div></div>
     </header>
