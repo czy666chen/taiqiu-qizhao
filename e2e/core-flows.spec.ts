@@ -114,6 +114,21 @@ test("斯诺克本机计分可形成 31+ 单杆、判罚并刷新恢复", async 
 
 test("玩法五卡布局与标准斯诺克设置在视口内稳定显示", async ({ page }) => {
   await page.goto("/");
+  const quickCards = page.locator(".quick-start .quick-card");
+  await expect(quickCards).toHaveCount(5);
+  await expect(quickCards.locator("b")).toHaveText(["中八双人赛", "标准斯诺克", "多人追分", "团战记分", "多人实时房间"]);
+  if ((await page.viewportSize())!.width > 900) {
+    const lowerCards = await page.locator(".quick-start .quick-card:nth-child(n + 3)").evaluateAll((cards) => cards.map((card) => {
+      const bounds = card.getBoundingClientRect();
+      return { top: bounds.top, width: bounds.width };
+    }));
+    expect(new Set(lowerCards.map((card) => Math.round(card.top))).size).toBe(1);
+    expect(Math.max(...lowerCards.map((card) => card.width)) - Math.min(...lowerCards.map((card) => card.width))).toBeLessThanOrEqual(1);
+  }
+  await page.getByRole("button", { name: /团战记分/ }).click();
+  await expect(page.getByRole("heading", { name: "创建团战记分" })).toBeVisible();
+  await page.getByRole("button", { name: "关闭团战设置" }).click();
+
   await page.goto("/play");
   const modeCards = page.locator(".mode-card");
   await expect(modeCards).toHaveCount(5);
@@ -301,6 +316,15 @@ test("牌组页默认数量、精简卡牌表单与官方牌库弹窗", async ({
   await expect(page.getByText("安全等级", { exact: true })).toHaveCount(0);
   await expect(page.getByText("安全提示（可选）", { exact: true })).toHaveCount(0);
 
+  await expect(page.locator(".deck-summary span").first()).toContainText("2");
+  const snookerDeck = page.getByRole("button", { name: /斯诺克牌组/ });
+  await expect(snookerDeck).toContainText("22 张");
+  await snookerDeck.click();
+  await expect(page.getByRole("dialog", { name: "斯诺克牌组清单" })).toBeVisible();
+  await expect(page.locator(".card-catalog-modal .catalog-list article")).toHaveCount(21);
+  await page.keyboard.press("Escape");
+  await expect(snookerDeck).toBeFocused();
+
   const officialDeck = page.getByRole("button", { name: /全量牌库/ });
   await officialDeck.click();
   await expect(page.getByRole("dialog", { name: "官方卡牌清单" })).toBeVisible();
@@ -318,6 +342,12 @@ test("战绩 JSON 可校验并下载长图和 PDF", async ({ page }) => {
   await page.route("**/api/auth/me", (route) => route.fulfill({ json: { user: { id: "user-1", username: "tester", publicCode: "TEST0001", nickname: "测试玩家", avatarUrl: null } } }));
   await page.route("**/api/history", (route) => route.fulfill({ json: { matches: [] } }));
   await page.goto("/profile");
+
+  const dataControlTrigger = page.getByRole("button", { name: "导出与删除" });
+  await expect(dataControlTrigger).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "导出与删除" })).toHaveCount(0);
+  await dataControlTrigger.click();
+  await expect(page.getByRole("dialog", { name: "导出与删除" })).toBeVisible();
 
   const input = page.getByLabel("粘贴 JSON 内容");
   await input.fill("{nope}");
@@ -345,6 +375,10 @@ test("战绩 JSON 可校验并下载长图和 PDF", async ({ page }) => {
   await page.getByRole("button", { name: "下载 PDF" }).click();
   await expect((await pdfDownload).suggestedFilename()).toBe("战绩报告.pdf");
   expect(mutationRequests).toEqual([]);
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "导出与删除" })).toHaveCount(0);
+  await expect(dataControlTrigger).toBeFocused();
 });
 
 test("登录用户可输入旧密码更改密码并看到忘记密码提示", async ({ page }) => {

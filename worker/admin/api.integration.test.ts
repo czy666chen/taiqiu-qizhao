@@ -589,6 +589,67 @@ describe("administrator authentication HTTP API", () => {
     });
   });
 
+  it("derives admin match details from locally synced snapshots when event tables are empty", async () => {
+    const ownerId = "10000000-0000-4000-8000-000000000011";
+    const matchId = "20000000-0000-4000-8000-000000000011";
+    const firstPlayerId = "30000000-0000-4000-8000-000000000011";
+    const secondPlayerId = "30000000-0000-4000-8000-000000000012";
+    const snapshot = {
+      schemaVersion: 1,
+      id: "local-eight-ball",
+      matchVersion: 2,
+      mode: "chinese_eight",
+      status: "completed",
+      createdAt: 1000,
+      startedAt: 1001,
+      endedAt: 1009,
+      players: [{ id: "red", name: "甲" }, { id: "blue", name: "乙" }],
+      firstServerId: "red",
+      serveRule: "alternate",
+      events: [
+        {
+          id: "round-1", operationId: "round-op-1", sequenceNo: 1, matchVersion: 1,
+          type: "round", occurredAt: 1005, source: "user", playerNames: { red: "甲", blue: "乙" },
+          round: { winnerId: "red", winType: "normal", fouls: { red: 0, blue: 0 }, note: "", startedAt: 1002, confirmedAt: 1005 },
+        },
+        {
+          id: "finish-1", operationId: "finish-op-1", sequenceNo: 2, matchVersion: 2,
+          type: "finish", occurredAt: 1009, source: "user", playerNames: { red: "甲", blue: "乙" },
+        },
+      ],
+      cards: {
+        events: [{ id: "card-1", type: "play", label: "使用加五分", handId: "red", occurredAt: 1004, card: { instanceId: "card-instance-1", title: "加五分" } }],
+      },
+    };
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO users (id, normalized_username, display_username, password_digest, status) VALUES (?1, 'snapown', 'snapown', 'digest', 'active')",
+      ).bind(ownerId),
+      env.DB.prepare(
+        `INSERT INTO matches (id, owner_user_id, mode, status, version, snapshot_json, created_at, updated_at, started_at, ended_at)
+         VALUES (?1, ?2, 'chinese_eight', 'completed', 2, ?3, 1000, 1009, 1001, 1009)`,
+      ).bind(matchId, ownerId, JSON.stringify(snapshot)),
+      env.DB.prepare(
+        `INSERT INTO match_players (id, match_id, seat_no, role, nickname_snapshot, joined_at)
+         VALUES (?1, ?3, 0, 'player', '甲', 1001), (?2, ?3, 1, 'player', '乙', 1001)`,
+      ).bind(firstPlayerId, secondPlayerId, matchId),
+    ]);
+    const login = await post("/api/admin/auth/login", { username: "admin", password: "secret1" });
+    const cookie = (login.headers.get("Set-Cookie") ?? "").split(";", 1)[0];
+
+    const detail = await SELF.fetch(`http://example.com/api/admin/matches/${matchId}`, { headers: { Cookie: cookie } });
+    expect(detail.status).toBe(200);
+    await expect(detail.json()).resolves.toMatchObject({
+      match: { players: [expect.objectContaining({ id: firstPlayerId, finalScore: 1 }), expect.objectContaining({ id: secondPlayerId, finalScore: 0 })] },
+      scoreEvents: [expect.objectContaining({ sequenceNo: 1, playerNickname: "甲", scoreDelta: 1 })],
+      cardEvents: [expect.objectContaining({ sequenceNo: 1, cardInstanceSnapshot: expect.objectContaining({ title: "加五分" }) })],
+      auditEvents: [
+        expect.objectContaining({ action: "round", afterVersion: 1 }),
+        expect.objectContaining({ action: "finish", afterVersion: 2 }),
+      ],
+    });
+  });
+
   it("changes its password, revokes every old session, and records the audit event", async () => {
     const firstLogin = await post("/api/admin/auth/login", { username: "admin", password: "secret1" });
     const firstCookie = (firstLogin.headers.get("Set-Cookie") ?? "").split(";", 1)[0];

@@ -101,6 +101,13 @@ function modeLabel(mode: string): string {
   return MODE_LABELS[mode] ?? mode;
 }
 
+function replaceAdminSearch(values: Record<string, string>): void {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(values)) if (value.trim()) params.set(key, value.trim());
+  const search = params.toString();
+  window.history.replaceState(window.history.state, "", `${window.location.pathname}${search ? `?${search}` : ""}`);
+}
+
 function AdminLink({ href, navigate, onClick, ...props }: AnchorHTMLAttributes<HTMLAnchorElement> & { href: string; navigate: (path: string) => void }) {
   const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
     onClick?.(event);
@@ -166,12 +173,12 @@ function UsersPage({ navigate }: { navigate: (path: string) => void }) {
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
 
-  const load = async (nextCursor?: string) => {
+  const load = async (nextCursor?: string, filters = { query, status }) => {
     setBusy(true);
     setError("");
     const params = new URLSearchParams({ limit: "30" });
-    if (query.trim()) params.set("query", query.trim());
-    if (status) params.set("status", status);
+    if (filters.query.trim()) params.set("query", filters.query.trim());
+    if (filters.status) params.set("status", filters.status);
     if (nextCursor) params.set("cursor", nextCursor);
     try {
       const result = await payload<{ users: UserSummary[]; nextCursor: string | null }>(await fetch(`/api/admin/users?${params}`));
@@ -184,14 +191,20 @@ function UsersPage({ navigate }: { navigate: (path: string) => void }) {
     }
   };
   useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0);
+    const params = new URLSearchParams(window.location.search);
+    const filters = { query: params.get("query") ?? "", status: params.get("status") ?? "" };
+    const timer = window.setTimeout(() => {
+      setQuery(filters.query);
+      setStatus(filters.status);
+      void load(undefined, filters);
+    }, 0);
     return () => window.clearTimeout(timer);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <section className="admin-page" aria-labelledby="users-title">
       <header className="admin-page-heading"><div><p className="admin-eyebrow">ACCOUNTS</p><h1 id="users-title">用户管理</h1></div><span>{users.length} 个已加载账号</span></header>
-      <form className="admin-filters" onSubmit={(event) => { event.preventDefault(); void load(); }}>
+      <form className="admin-filters" onSubmit={(event) => { event.preventDefault(); replaceAdminSearch({ query, status }); void load(); }}>
         <label><span>用户名或昵称</span><input name="user-query" autoComplete="off" spellCheck={false} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="例如：小王…" /></label>
         <label><span>账号状态</span><select name="user-status" autoComplete="off" value={status} onChange={(event) => setStatus(event.target.value)}><option value="">全部状态</option><option value="active">正常</option><option value="disabled">已禁用</option><option value="deleted">已删除</option></select></label>
         <button className="admin-primary" disabled={busy}>查询</button>
@@ -328,12 +341,12 @@ function MatchesPage({ navigate }: { navigate: (path: string) => void }) {
   const [cursor, setCursor] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
-  const load = async (nextCursor?: string) => {
+  const load = async (nextCursor?: string, filters = { query, mode, status }) => {
     setBusy(true); setError("");
     const params = new URLSearchParams({ limit: "30" });
-    if (query.trim()) params.set("query", query.trim());
-    if (mode) params.set("mode", mode);
-    if (status) params.set("status", status);
+    if (filters.query.trim()) params.set("query", filters.query.trim());
+    if (filters.mode) params.set("mode", filters.mode);
+    if (filters.status) params.set("status", filters.status);
     if (nextCursor) params.set("cursor", nextCursor);
     try {
       const result = await payload<{ matches: MatchSummary[]; nextCursor: string | null }>(await fetch(`/api/admin/matches?${params}`));
@@ -343,13 +356,20 @@ function MatchesPage({ navigate }: { navigate: (path: string) => void }) {
     finally { setBusy(false); }
   };
   useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0);
+    const params = new URLSearchParams(window.location.search);
+    const filters = { query: params.get("query") ?? "", mode: params.get("mode") ?? "", status: params.get("status") ?? "" };
+    const timer = window.setTimeout(() => {
+      setQuery(filters.query);
+      setMode(filters.mode);
+      setStatus(filters.status);
+      void load(undefined, filters);
+    }, 0);
     return () => window.clearTimeout(timer);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <section className="admin-page" aria-labelledby="matches-title">
       <header className="admin-page-heading"><div><p className="admin-eyebrow">MATCH ARCHIVE</p><h1 id="matches-title">战绩管理</h1></div><span>{matches.length} 场已加载对局</span></header>
-      <form className="admin-filters matches" onSubmit={(event) => { event.preventDefault(); void load(); }}>
+      <form className="admin-filters matches" onSubmit={(event) => { event.preventDefault(); replaceAdminSearch({ query, mode, status }); void load(); }}>
         <label><span>编号或玩家</span><input name="match-query" autoComplete="off" spellCheck={false} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="例如：房间编号或玩家昵称…" /></label>
         <label><span>模式</span><select name="match-mode" autoComplete="off" value={mode} onChange={(event) => setMode(event.target.value)}><option value="">全部模式</option><option value="score">多人追分</option><option value="cards">奇招牌</option><option value="score_cards">追分 + 奇招牌</option><option value="chinese_eight">中式八球</option><option value="snooker">斯诺克</option></select></label>
         <label><span>状态</span><select name="match-status" autoComplete="off" value={status} onChange={(event) => setStatus(event.target.value)}><option value="">全部状态</option><option value="draft">草稿</option><option value="active">进行中</option><option value="completed">已完成</option><option value="cancelled">已取消</option></select></label>
@@ -424,7 +444,7 @@ export default function AdminApp({ path, navigate }: { path: string; navigate: (
       <a className="admin-skip" href="#admin-content">跳到主要内容</a>
       <aside className="admin-sidebar"><AdminLink className="admin-brand" href="/admin/users" navigate={navigate}><span>8</span><div><b>台球奇招</b><small>管理后台</small></div></AdminLink><nav aria-label="管理后台导航"><AdminLink className={path.startsWith("/admin/users") ? "active" : ""} href="/admin/users" navigate={navigate} aria-current={path.startsWith("/admin/users") ? "page" : undefined}>用户</AdminLink><AdminLink className={path.startsWith("/admin/matches") ? "active" : ""} href="/admin/matches" navigate={navigate} aria-current={path.startsWith("/admin/matches") ? "page" : undefined}>战绩</AdminLink></nav><div className="admin-account"><span>{admin.username.slice(0, 1).toUpperCase()}</span><div><b>{admin.username}</b><small>管理员</small></div><button onClick={() => void logout()}>退出</button></div></aside>
       <div className="admin-mobile-bar"><AdminLink className="admin-mobile-brand" href="/admin/users" navigate={navigate}>8 · 管理后台</AdminLink><nav aria-label="移动端管理导航"><AdminLink href="/admin/users" navigate={navigate}>用户</AdminLink><AdminLink href="/admin/matches" navigate={navigate}>战绩</AdminLink><button onClick={() => void logout()}>退出</button></nav></div>
-      <div id="admin-content" className="admin-content">{userId ? <UserDetailPage userId={userId} navigate={navigate} /> : matchId ? <MatchDetailPage matchId={matchId} navigate={navigate} /> : path === "/admin/matches" ? <MatchesPage navigate={navigate} /> : <UsersPage navigate={navigate} />}</div>
+      <div id="admin-content" className="admin-content" tabIndex={-1}>{userId ? <UserDetailPage userId={userId} navigate={navigate} /> : matchId ? <MatchDetailPage matchId={matchId} navigate={navigate} /> : path === "/admin/matches" ? <MatchesPage navigate={navigate} /> : <UsersPage navigate={navigate} />}</div>
     </main>
   );
 }

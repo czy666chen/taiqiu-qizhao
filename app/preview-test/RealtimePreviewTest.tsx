@@ -172,7 +172,7 @@ export default function RealtimePreviewTest() {
           <dl><div><dt>房间码</dt><dd>{result.roomCode}</dd></div><div><dt>结果</dt><dd>{result.message}</dd></div><div><dt>Request ID</dt><dd><code>{result.requestId}</code></dd></div></dl>
         </article>)}
       </div>}
-      {message && <div className={`${styles.summary} ${passed ? styles.passed : ""}`}><span>{passed ? "✓" : running ? "…" : "!"}</span>{message}</div>}
+      {message && <div className={`${styles.summary} ${passed ? styles.passed : ""}`} role="status" aria-live="polite"><span aria-hidden="true">{passed ? "✓" : running ? "…" : "!"}</span>{message}</div>}
     </section>
 
     <footer className={styles.footer}>台球奇招 · A4 PREVIEW GATE · 不写入 Cookie、密码或完整请求体</footer>

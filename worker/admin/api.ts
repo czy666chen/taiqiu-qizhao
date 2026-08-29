@@ -373,6 +373,123 @@ type AdminMatchAuditRow = {
   created_at: number;
 };
 
+type SnapshotRecord = Record<string, unknown>;
+
+function snapshotRecord(value: unknown): SnapshotRecord | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as SnapshotRecord : null;
+}
+
+function snapshotArray(value: unknown): SnapshotRecord[] {
+  return Array.isArray(value) ? value.map(snapshotRecord).filter((item): item is SnapshotRecord => item !== null) : [];
+}
+
+function snapshotNumber(value: unknown, fallback = 0): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function snapshotString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function snapshotMatchFallbacks(snapshot: SnapshotRecord, players: AdminMatchPlayerRow[]): {
+  finalScores: Map<string, number>;
+  scoreEvents: Array<Record<string, unknown>>;
+  cardEvents: Array<Record<string, unknown>>;
+  auditEvents: Array<Record<string, unknown>>;
+} {
+  const snapshotPlayers = snapshotArray(snapshot.players);
+  const playerBySnapshotId = new Map<string, AdminMatchPlayerRow>();
+  const finalScores = new Map<string, number>();
+  snapshotPlayers.forEach((player, seat) => {
+    const stored = players[seat];
+    if (!stored) return;
+    const snapshotId = snapshotString(player.id);
+    if (snapshotId) playerBySnapshotId.set(snapshotId, stored);
+    if (typeof player.score === "number" && Number.isFinite(player.score)) finalScores.set(stored.id, player.score);
+  });
+
+  const rawEvents = snapshotArray(snapshot.events);
+  const scoreEvents: Array<Record<string, unknown>> = [];
+  if (snapshot.mode === "chinese_eight") {
+    const corrections = new Map(rawEvents
+      .filter((event) => event.type === "correction" && typeof event.correctsEventId === "string")
+      .map((event) => [String(event.correctsEventId), event]));
+    for (const event of rawEvents.filter((item) => item.type === "round")) {
+      const correction = corrections.get(snapshotString(event.id));
+      const round = snapshotRecord(correction ? correction.replacement : event.round);
+      if (!round) continue;
+      const player = playerBySnapshotId.get(snapshotString(round.winnerId));
+      if (!player) continue;
+      finalScores.set(player.id, (finalScores.get(player.id) ?? 0) + 1);
+      scoreEvents.push({
+        id: snapshotString(event.id, `snapshot-score-${scoreEvents.length + 1}`),
+        operationId: snapshotString(event.operationId, snapshotString(event.id)),
+        sequenceNo: snapshotNumber(event.sequenceNo, scoreEvents.length + 1),
+        actorUserId: null,
+        actorUsername: null,
+        playerId: player.id,
+        playerNickname: player.nickname ?? player.nickname_snapshot,
+        scoreDelta: 1,
+        correctionEventId: correction ? snapshotString(correction.id) || null : null,
+        payload: round,
+        occurredAt: snapshotNumber(correction?.occurredAt, snapshotNumber(event.occurredAt)),
+        createdAt: snapshotNumber(correction?.occurredAt, snapshotNumber(event.occurredAt)),
+      });
+    }
+  } else {
+    const rawScoreEvents = snapshotArray(snapshot.scoreEvents).sort((left, right) => snapshotNumber(left.occurredAt) - snapshotNumber(right.occurredAt));
+    rawScoreEvents.forEach((event, index) => {
+      const player = playerBySnapshotId.get(snapshotString(event.playerId));
+      if (!player) return;
+      const changes = snapshotRecord(event.changes);
+      const scoreDelta = snapshotNumber(changes?.[snapshotString(event.playerId)]);
+      scoreEvents.push({
+        id: snapshotString(event.id, `snapshot-score-${index + 1}`),
+        operationId: snapshotString(event.id, `snapshot-score-${index + 1}`),
+        sequenceNo: index + 1,
+        actorUserId: null,
+        actorUsername: null,
+        playerId: player.id,
+        playerNickname: player.nickname ?? player.nickname_snapshot,
+        scoreDelta,
+        correctionEventId: typeof event.correctsEventId === "string" ? event.correctsEventId : null,
+        payload: event,
+        occurredAt: snapshotNumber(event.occurredAt),
+        createdAt: snapshotNumber(event.occurredAt),
+      });
+    });
+  }
+
+  const cards = snapshotRecord(snapshot.cards);
+  const rawCardEvents = snapshotArray(cards?.events).sort((left, right) => snapshotNumber(left.occurredAt) - snapshotNumber(right.occurredAt));
+  const cardEvents = rawCardEvents.map((event, index) => {
+    const card = snapshotRecord(event.card);
+    return {
+      id: snapshotString(event.id, `snapshot-card-${index + 1}`),
+      operationId: snapshotString(event.actionId, snapshotString(event.id, `snapshot-card-${index + 1}`)),
+      sequenceNo: index + 1,
+      actorUserId: null,
+      actorUsername: null,
+      cardInstanceSnapshot: snapshotRecord(card?.snapshot) ?? card ?? { title: snapshotString(event.label, "卡牌操作") },
+      scoreEventId: typeof event.relatedScoreEventId === "string" ? event.relatedScoreEventId : null,
+      occurredAt: snapshotNumber(event.occurredAt),
+      createdAt: snapshotNumber(event.occurredAt),
+    };
+  });
+  const auditEvents = rawEvents.map((event, index) => ({
+    id: snapshotString(event.id, `snapshot-audit-${index + 1}`),
+    actorUserId: null,
+    actorUsername: null,
+    action: snapshotString(event.type, "snapshot_event"),
+    reason: null,
+    beforeVersion: Math.max(0, snapshotNumber(event.matchVersion, index + 1) - 1),
+    afterVersion: snapshotNumber(event.matchVersion, index + 1),
+    metadata: event,
+    createdAt: snapshotNumber(event.occurredAt),
+  }));
+  return { finalScores, scoreEvents, cardEvents, auditEvents };
+}
+
 function listUsersParameters(request: Request): {
   query: string;
   status: string | null;
@@ -742,49 +859,60 @@ async function matchDetail(request: Request, env: AdminEnv, matchId: string): Pr
   const match = matchResult.results[0] as AdminMatchDetailRow | undefined;
   if (!match) return json({ error: "战绩不存在" }, 404);
 
+  const rawSnapshot = match.snapshot_json === null ? null : JSON.parse(match.snapshot_json) as unknown;
+  const players = playersResult.results as AdminMatchPlayerRow[];
+  const parsedSnapshot = snapshotRecord(rawSnapshot);
+  const fallback = parsedSnapshot ? snapshotMatchFallbacks(parsedSnapshot, players) : null;
+  const scoreEvents = (scoresResult.results as AdminScoreEventRow[]).map((event) => ({
+    id: event.id,
+    operationId: event.operation_id,
+    sequenceNo: event.sequence_no,
+    actorUserId: event.actor_user_id,
+    actorUsername: event.actor_username,
+    playerId: event.player_id,
+    playerNickname: event.player_nickname,
+    scoreDelta: event.score_delta,
+    correctionEventId: event.correction_event_id,
+    payload: JSON.parse(event.payload_json),
+    occurredAt: event.occurred_at,
+    createdAt: event.created_at,
+  }));
+  const cardEvents = (cardsResult.results as AdminCardEventRow[]).map((event) => ({
+    id: event.id,
+    operationId: event.operation_id,
+    sequenceNo: event.sequence_no,
+    actorUserId: event.actor_user_id,
+    actorUsername: event.actor_username,
+    cardInstanceSnapshot: JSON.parse(event.card_instance_snapshot_json),
+    scoreEventId: event.score_event_id,
+    occurredAt: event.occurred_at,
+    createdAt: event.created_at,
+  }));
+  const auditEvents = (auditResult.results as AdminMatchAuditRow[]).map((event) => ({
+    id: event.id,
+    actorUserId: event.actor_user_id,
+    actorUsername: event.actor_username,
+    action: event.action,
+    reason: event.reason,
+    beforeVersion: event.before_version,
+    afterVersion: event.after_version,
+    metadata: JSON.parse(event.metadata_json),
+    createdAt: event.created_at,
+  }));
+  const detailPlayers = scoreEvents.length || !fallback
+    ? players
+    : players.map((player) => ({ ...player, final_score: fallback.finalScores.get(player.id) ?? player.final_score }));
+
   return json({
     match: {
-      ...adminMatchSummary(match, playersResult.results as AdminMatchPlayerRow[]),
+      ...adminMatchSummary(match, detailPlayers),
       snapshotChecksum: match.snapshot_checksum,
-      rawSnapshot: match.snapshot_json === null ? null : JSON.parse(match.snapshot_json),
+      rawSnapshot,
       realtime: match.is_realtime ? { roomCode: match.room_code, status: match.room_status } : null,
     },
-    scoreEvents: (scoresResult.results as AdminScoreEventRow[]).map((event) => ({
-      id: event.id,
-      operationId: event.operation_id,
-      sequenceNo: event.sequence_no,
-      actorUserId: event.actor_user_id,
-      actorUsername: event.actor_username,
-      playerId: event.player_id,
-      playerNickname: event.player_nickname,
-      scoreDelta: event.score_delta,
-      correctionEventId: event.correction_event_id,
-      payload: JSON.parse(event.payload_json),
-      occurredAt: event.occurred_at,
-      createdAt: event.created_at,
-    })),
-    cardEvents: (cardsResult.results as AdminCardEventRow[]).map((event) => ({
-      id: event.id,
-      operationId: event.operation_id,
-      sequenceNo: event.sequence_no,
-      actorUserId: event.actor_user_id,
-      actorUsername: event.actor_username,
-      cardInstanceSnapshot: JSON.parse(event.card_instance_snapshot_json),
-      scoreEventId: event.score_event_id,
-      occurredAt: event.occurred_at,
-      createdAt: event.created_at,
-    })),
-    auditEvents: (auditResult.results as AdminMatchAuditRow[]).map((event) => ({
-      id: event.id,
-      actorUserId: event.actor_user_id,
-      actorUsername: event.actor_username,
-      action: event.action,
-      reason: event.reason,
-      beforeVersion: event.before_version,
-      afterVersion: event.after_version,
-      metadata: JSON.parse(event.metadata_json),
-      createdAt: event.created_at,
-    })),
+    scoreEvents: scoreEvents.length ? scoreEvents : fallback?.scoreEvents ?? [],
+    cardEvents: cardEvents.length ? cardEvents : fallback?.cardEvents ?? [],
+    auditEvents: auditEvents.length ? auditEvents : fallback?.auditEvents ?? [],
   });
 }
 

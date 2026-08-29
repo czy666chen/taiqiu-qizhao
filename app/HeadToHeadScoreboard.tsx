@@ -17,11 +17,11 @@ export function HeadToHeadScoreboard({ sides, layout = "split", onNameChange }: 
     {sides.map((side, index) => <article key={side.id} className={index ? "blue" : "red"}>
       <div>
         {onNameChange
-          ? <input aria-label={`${side.name}姓名`} value={side.name} onChange={(event) => onNameChange(side.id, event.target.value)} />
+          ? <input name={`scoreboard-player-${side.id}-name`} autoComplete="off" aria-label={`${side.name}姓名`} value={side.name} onChange={(event) => onNameChange(side.id, event.target.value)} />
           : <b>{side.name}</b>}
         <small>{side.label}</small>
       </div>
-      <strong>{side.score}</strong>
+      <strong aria-live="polite" aria-atomic="true">{side.score}</strong>
       <dl>{side.stats.map((stat) => <div key={stat.label}><dt>{stat.label}</dt><dd>{stat.value}</dd></div>)}</dl>
     </article>)}
   </section>;
