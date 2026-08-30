@@ -2,6 +2,7 @@
 
 import { type AnchorHTMLAttributes, FormEvent, type MouseEvent, useEffect, useRef, useState } from "react";
 import { getSnookerBreakStats, isSnookerMatch } from "../src/lib/snooker";
+import { getTeamBattleProjection, isTeamBattleMatch } from "../src/lib/team-battle";
 
 type Admin = { id: string; username: string };
 type UserSummary = {
@@ -79,6 +80,7 @@ const MODE_LABELS: Record<string, string> = {
   score_cards: "追分 + 奇招牌",
   chinese_eight: "中式八球",
   snooker: "斯诺克",
+  team_battle: "团战记分",
 };
 
 async function payload<T>(response: Response): Promise<T> {
@@ -371,7 +373,7 @@ function MatchesPage({ navigate }: { navigate: (path: string) => void }) {
       <header className="admin-page-heading"><div><p className="admin-eyebrow">MATCH ARCHIVE</p><h1 id="matches-title">战绩管理</h1></div><span>{matches.length} 场已加载对局</span></header>
       <form className="admin-filters matches" onSubmit={(event) => { event.preventDefault(); replaceAdminSearch({ query, mode, status }); void load(); }}>
         <label><span>编号或玩家</span><input name="match-query" autoComplete="off" spellCheck={false} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="例如：房间编号或玩家昵称…" /></label>
-        <label><span>模式</span><select name="match-mode" autoComplete="off" value={mode} onChange={(event) => setMode(event.target.value)}><option value="">全部模式</option><option value="score">多人追分</option><option value="cards">奇招牌</option><option value="score_cards">追分 + 奇招牌</option><option value="chinese_eight">中式八球</option><option value="snooker">斯诺克</option></select></label>
+        <label><span>模式</span><select name="match-mode" autoComplete="off" value={mode} onChange={(event) => setMode(event.target.value)}><option value="">全部模式</option><option value="score">多人追分</option><option value="cards">奇招牌</option><option value="score_cards">追分 + 奇招牌</option><option value="chinese_eight">中式八球</option><option value="snooker">斯诺克</option><option value="team_battle">团战记分</option></select></label>
         <label><span>状态</span><select name="match-status" autoComplete="off" value={status} onChange={(event) => setStatus(event.target.value)}><option value="">全部状态</option><option value="draft">草稿</option><option value="active">进行中</option><option value="completed">已完成</option><option value="cancelled">已取消</option></select></label>
         <button className="admin-primary" disabled={busy}>查询</button>
       </form>
@@ -398,14 +400,26 @@ function MatchDetailPage({ matchId, navigate }: { matchId: string; navigate: (pa
   const { match } = data;
   const snooker = isSnookerMatch(match.rawSnapshot) ? match.rawSnapshot : null;
   const snookerStats = snooker ? getSnookerBreakStats(snooker) : null;
+  const teamBattle = isTeamBattleMatch(match.rawSnapshot) ? match.rawSnapshot : null;
+  const teamBattleProjection = teamBattle ? getTeamBattleProjection(teamBattle) : null;
+  const teamBattleNames = new Map(teamBattle?.players.map((player) => [player.id, player.name]) ?? []);
+  const teamBattleName = (playerId: string) => teamBattleNames.get(playerId) ?? "未知成员";
+  const playerScore = (player: MatchPlayer): number | string => {
+    const teamPlayer = teamBattle?.players[player.seatNo];
+    const teamStats = teamPlayer ? teamBattleProjection?.playerStats[teamPlayer.id] : null;
+    if (teamStats) return `${teamStats.wins} 胜 ${teamStats.losses} 负`;
+    if (snooker) return snooker.framesWon[snooker.players[player.seatNo]?.id] ?? 0;
+    return player.finalScore ?? 0;
+  };
   return (
     <section className="admin-page">
       <AdminLink className="admin-back" href="/admin/matches" navigate={navigate}>← 返回战绩</AdminLink>
       <header className="admin-page-heading"><div><p className="admin-eyebrow">{match.id}</p><h1>{modeLabel(match.mode)}</h1><p>{dateTime(match.createdAt)} · 版本 {match.version}</p></div><span className={`admin-status ${match.status}`}>{statusLabel(match.status)}</span></header>
-      <div className="admin-score-grid">{match.players.map((player) => <article key={player.id}><small>{player.role} · 座位 {player.seatNo + 1}</small><b>{player.nickname ?? player.nicknameSnapshot}</b><strong>{snooker ? snooker.framesWon[snooker.players[player.seatNo]?.id] ?? 0 : player.finalScore ?? 0}</strong><span>{player.username ? `@${player.username}` : "游客"}</span></article>)}</div>
+      <div className="admin-score-grid">{match.players.map((player) => <article key={player.id}><small>{player.role} · 座位 {player.seatNo + 1}</small><b>{player.nickname ?? player.nicknameSnapshot}</b><strong>{playerScore(player)}</strong><span>{player.username ? `@${player.username}` : "游客"}</span></article>)}</div>
       {snooker && snookerStats && <section className="admin-panel"><h2>斯诺克只读摘要</h2><p>{snooker.players.map((player) => `${player.name} ${snooker.framesWon[player.id]}`).join(" : ")} · {snooker.currentFrame ? `当前局 ${snooker.players.map((player) => snooker.currentFrame!.scores[player.id]).join(" : ")}` : `${snooker.completedFrames.length} 局已结束`} · 最高单杆 {snookerStats.highestBreak} · 30+ {snookerStats.breaks30PlusCount} · {snooker.variant === "trick_cards" ? "奇招牌变体局" : "标准规则"}</p></section>}
+      {teamBattleProjection && <section className="admin-panel"><h2>团战最终统计</h2><p>{teamBattleProjection.standings.map((standing) => `${standing.rank}. ${standing.player.name} ${standing.wins}胜${standing.losses}负`).join(" · ")}</p></section>}
       <div className="admin-detail-grid">
-        <section className="admin-panel"><h2>比分事件 · {data.scoreEvents.length}</h2>{data.scoreEvents.map((event) => <article className="admin-timeline" key={event.id}><span>{event.sequenceNo}</span><div><b>{event.playerNickname} {event.scoreDelta >= 0 ? "+" : ""}{event.scoreDelta}</b><small>{event.actorUsername ?? "系统"} · {dateTime(event.occurredAt)}</small></div></article>)}</section>
+        {teamBattleProjection ? <section className="admin-panel"><h2>逐局流水 · {teamBattleProjection.rounds.length}</h2>{teamBattleProjection.rounds.map((round, index) => { const [firstPlayerId, secondPlayerId] = round.playerIds; const loserId = firstPlayerId === round.winnerId ? secondPlayerId : firstPlayerId; return <article className="admin-timeline" key={round.eventId}><span>{index + 1}</span><div><b>{teamBattleName(round.winnerId)} 胜 {teamBattleName(loserId)}</b><small>{teamBattleName(firstPlayerId)} {round.after[firstPlayerId] ?? 0} : {round.after[secondPlayerId] ?? 0} {teamBattleName(secondPlayerId)} · {dateTime(round.confirmedAt)}</small></div></article>; })}</section> : <section className="admin-panel"><h2>比分事件 · {data.scoreEvents.length}</h2>{data.scoreEvents.map((event) => <article className="admin-timeline" key={event.id}><span>{event.sequenceNo}</span><div><b>{event.playerNickname} {event.scoreDelta >= 0 ? "+" : ""}{event.scoreDelta}</b><small>{event.actorUsername ?? "系统"} · {dateTime(event.occurredAt)}</small></div></article>)}</section>}
         <section className="admin-panel"><h2>卡牌事件 · {data.cardEvents.length}</h2>{data.cardEvents.map((event) => <article className="admin-timeline" key={event.id}><span>{event.sequenceNo}</span><div><b>{String(event.cardInstanceSnapshot.name ?? event.cardInstanceSnapshot.title ?? "卡牌操作")}</b><small>{event.actorUsername ?? "系统"} · {dateTime(event.occurredAt)}</small></div></article>)}</section>
       </div>
       <section className="admin-panel"><h2>对局审计 · {data.auditEvents.length}</h2>{data.auditEvents.map((event) => <article className="admin-record" key={event.id}><span><b>{event.action}</b><small>{event.actorUsername ?? "系统"} · {dateTime(event.createdAt)}</small></span><small>{event.reason ?? "—"}</small></article>)}</section>

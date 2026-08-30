@@ -650,6 +650,79 @@ describe("administrator authentication HTTP API", () => {
     });
   });
 
+  it("derives corrected team battle standings and round events from a locally synced snapshot", async () => {
+    const ownerId = "10000000-0000-4000-8000-000000000021";
+    const matchId = "20000000-0000-4000-8000-000000000021";
+    const storedPlayerIds = [
+      "30000000-0000-4000-8000-000000000021",
+      "30000000-0000-4000-8000-000000000022",
+      "30000000-0000-4000-8000-000000000023",
+    ];
+    const names = { red: "甲", blue: "乙", green: "丙" };
+    const round = (playerIds: [string, string], winnerId: string, startedAt: number, confirmedAt: number) => ({
+      playerIds, winnerId, winType: "normal", fouls: { [playerIds[0]]: 0, [playerIds[1]]: 0 }, note: "", startedAt, confirmedAt,
+    });
+    const snapshot = {
+      schemaVersion: 1,
+      id: "local-team-battle",
+      mode: "team_battle",
+      status: "completed",
+      title: "周末团战",
+      location: "俱乐部",
+      note: "",
+      createdAt: 1000,
+      startedAt: 1001,
+      endedAt: 1010,
+      pausedDurationMs: 0,
+      players: [
+        { id: "red", name: "甲", joinedAt: 1001 },
+        { id: "blue", name: "乙", joinedAt: 1001 },
+        { id: "green", name: "丙", joinedAt: 1001 },
+      ],
+      events: [
+        { id: "round-1", sequenceNo: 1, type: "round", occurredAt: 1004, playerNames: names, round: round(["red", "blue"], "red", 1002, 1004) },
+        { id: "round-2", sequenceNo: 2, type: "round", occurredAt: 1007, playerNames: names, round: round(["red", "green"], "green", 1005, 1007) },
+        { id: "correction-1", sequenceNo: 3, type: "correction", occurredAt: 1008, playerNames: names, correctsEventId: "round-2", replacement: round(["red", "green"], "red", 1005, 1008) },
+        { id: "finish-1", sequenceNo: 4, type: "finish", occurredAt: 1010, playerNames: names },
+      ],
+    };
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO users (id, normalized_username, display_username, password_digest, status) VALUES (?1, 'teamown', 'teamown', 'digest', 'active')",
+      ).bind(ownerId),
+      env.DB.prepare(
+        `INSERT INTO matches (id, owner_user_id, mode, status, version, snapshot_json, created_at, updated_at, started_at, ended_at)
+         VALUES (?1, ?2, 'team_battle', 'completed', 4, ?3, 1000, 1010, 1001, 1010)`,
+      ).bind(matchId, ownerId, JSON.stringify(snapshot)),
+      env.DB.prepare(
+        `INSERT INTO match_players (id, match_id, seat_no, role, nickname_snapshot, joined_at)
+         VALUES (?1, ?4, 0, 'player', '甲', 1001), (?2, ?4, 1, 'player', '乙', 1001), (?3, ?4, 2, 'player', '丙', 1001)`,
+      ).bind(...storedPlayerIds, matchId),
+    ]);
+    const login = await post("/api/admin/auth/login", { username: "admin", password: "secret1" });
+    const cookie = (login.headers.get("Set-Cookie") ?? "").split(";", 1)[0];
+
+    const detail = await SELF.fetch(`http://example.com/api/admin/matches/${matchId}`, { headers: { Cookie: cookie } });
+    expect(detail.status).toBe(200);
+    await expect(detail.json()).resolves.toMatchObject({
+      match: { mode: "team_battle", players: [
+        expect.objectContaining({ id: storedPlayerIds[0], finalScore: 2 }),
+        expect.objectContaining({ id: storedPlayerIds[1], finalScore: 0 }),
+        expect.objectContaining({ id: storedPlayerIds[2], finalScore: 0 }),
+      ] },
+      scoreEvents: [
+        expect.objectContaining({ id: "round-1", sequenceNo: 1, playerNickname: "甲", scoreDelta: 1 }),
+        expect.objectContaining({ id: "round-2", sequenceNo: 2, playerNickname: "甲", scoreDelta: 1, correctionEventId: "correction-1" }),
+      ],
+      auditEvents: [
+        expect.objectContaining({ action: "round" }),
+        expect.objectContaining({ action: "round" }),
+        expect.objectContaining({ action: "correction" }),
+        expect.objectContaining({ action: "finish" }),
+      ],
+    });
+  });
+
   it("changes its password, revokes every old session, and records the audit event", async () => {
     const firstLogin = await post("/api/admin/auth/login", { username: "admin", password: "secret1" });
     const firstCookie = (firstLogin.headers.get("Set-Cookie") ?? "").split(";", 1)[0];

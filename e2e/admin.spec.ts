@@ -92,3 +92,58 @@ test("管理员可登录并进入用户列表", async ({ page }, testInfo) => {
   await expect(page.getByRole("heading", { name: "战绩管理" })).toBeVisible();
   await expect(page.getByText("match-1")).toBeVisible();
 });
+
+test("管理后台可筛选团战并从同步快照展示最终统计与逐局流水", async ({ page }) => {
+  const names = { red: "甲", blue: "乙", green: "丙" };
+  const snapshot = {
+    schemaVersion: 1, id: "local-team", mode: "team_battle", status: "completed",
+    title: "周末团战", location: "俱乐部", note: "", createdAt: 1000, startedAt: 1001, endedAt: 1010, pausedDurationMs: 0,
+    players: [
+      { id: "red", name: "甲", joinedAt: 1001 },
+      { id: "blue", name: "乙", joinedAt: 1001 },
+      { id: "green", name: "丙", joinedAt: 1001 },
+    ],
+    events: [
+      { id: "round-1", sequenceNo: 1, type: "round", occurredAt: 1004, playerNames: names, round: { playerIds: ["red", "blue"], winnerId: "red", winType: "normal", fouls: { red: 0, blue: 0 }, note: "", startedAt: 1002, confirmedAt: 1004 } },
+      { id: "round-2", sequenceNo: 2, type: "round", occurredAt: 1007, playerNames: names, round: { playerIds: ["red", "green"], winnerId: "green", winType: "break_clear", fouls: { red: 0, green: 0 }, note: "", startedAt: 1005, confirmedAt: 1007 } },
+      { id: "finish-1", sequenceNo: 3, type: "finish", occurredAt: 1010, playerNames: names },
+    ],
+  };
+  const players = ["甲", "乙", "丙"].map((nicknameSnapshot, seatNo) => ({
+    id: `stored-${seatNo}`, seatNo, userId: null, role: "player", nicknameSnapshot,
+    username: null, nickname: null, userStatus: null, finalScore: seatNo === 0 || seatNo === 2 ? 1 : 0,
+  }));
+  await page.route("**/api/admin/auth/session", (route) => route.fulfill({
+    json: { admin: { id: "admin-1", username: "admin" }, session: { authenticated: true } },
+  }));
+  await page.route("**/api/admin/matches?**", async (route) => {
+    expect(new URL(route.request().url()).searchParams.get("mode")).toBe("team_battle");
+    await route.fulfill({ json: { matches: [{
+      id: "team-match-1", mode: "team_battle", status: "completed", privacy: "participants", version: 3,
+      owner: { userId: "user-1", username: "player", nickname: "测试玩家", userStatus: "active" },
+      players, createdAt: 1000, updatedAt: 1010, startedAt: 1001, endedAt: 1010, isRealtime: false,
+    }], nextCursor: null } });
+  });
+  await page.route("**/api/admin/matches/team-match-1", (route) => route.fulfill({ json: {
+    match: {
+      id: "team-match-1", mode: "team_battle", status: "completed", privacy: "participants", version: 3,
+      owner: { userId: "user-1", username: "player", nickname: "测试玩家", userStatus: "active" },
+      players, createdAt: 1000, updatedAt: 1010, startedAt: 1001, endedAt: 1010, isRealtime: false,
+      snapshotChecksum: "checksum", rawSnapshot: snapshot, realtime: null,
+    },
+    scoreEvents: [], cardEvents: [], auditEvents: [],
+  } }));
+
+  await page.goto("/admin/matches?mode=team_battle");
+  await expect(page.getByLabel("模式")).toHaveValue("team_battle");
+  await expect(page.getByRole("option", { name: "团战记分" })).toBeAttached();
+  await page.getByRole("link", { name: /甲 · 乙 · 丙/ }).click();
+  await expect(page.getByRole("heading", { name: "团战记分" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "团战最终统计" })).toBeVisible();
+  await expect(page.getByText("1 胜 1 负")).toBeVisible();
+  await expect(page.getByText("0 胜 1 负")).toBeVisible();
+  await expect(page.getByText("1 胜 0 负")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "逐局流水 · 2" })).toBeVisible();
+  await expect(page.getByText("甲 胜 乙")).toBeVisible();
+  await expect(page.getByText("丙 胜 甲")).toBeVisible();
+});

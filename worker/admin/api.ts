@@ -7,6 +7,7 @@ import {
   validatePassword,
   verifySecret,
 } from "../auth/core";
+import { getTeamBattleProjection, isTeamBattleMatch } from "../../src/lib/team-battle";
 
 const ADMIN_COOKIE_NAME = "__Host-hei8_admin_session";
 const MAX_JSON_BYTES = 16 * 1024;
@@ -409,11 +410,33 @@ function snapshotMatchFallbacks(snapshot: SnapshotRecord, players: AdminMatchPla
   });
 
   const rawEvents = snapshotArray(snapshot.events);
+  const corrections = new Map(rawEvents
+    .filter((event) => event.type === "correction" && typeof event.correctsEventId === "string")
+    .map((event) => [String(event.correctsEventId), event]));
   const scoreEvents: Array<Record<string, unknown>> = [];
-  if (snapshot.mode === "chinese_eight") {
-    const corrections = new Map(rawEvents
-      .filter((event) => event.type === "correction" && typeof event.correctsEventId === "string")
-      .map((event) => [String(event.correctsEventId), event]));
+  if (isTeamBattleMatch(snapshot)) {
+    const projection = getTeamBattleProjection(snapshot);
+    for (const round of projection.rounds) {
+      const player = playerBySnapshotId.get(round.winnerId);
+      if (!player) continue;
+      const correction = corrections.get(round.eventId);
+      finalScores.set(player.id, (finalScores.get(player.id) ?? 0) + 1);
+      scoreEvents.push({
+        id: round.eventId,
+        operationId: round.eventId,
+        sequenceNo: round.sequenceNo,
+        actorUserId: null,
+        actorUsername: null,
+        playerId: player.id,
+        playerNickname: player.nickname ?? player.nickname_snapshot,
+        scoreDelta: 1,
+        correctionEventId: correction ? snapshotString(correction.id) || null : null,
+        payload: round,
+        occurredAt: round.confirmedAt,
+        createdAt: round.confirmedAt,
+      });
+    }
+  } else if (snapshot.mode === "chinese_eight") {
     for (const event of rawEvents.filter((item) => item.type === "round")) {
       const correction = corrections.get(snapshotString(event.id));
       const round = snapshotRecord(correction ? correction.replacement : event.round);
