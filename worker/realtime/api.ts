@@ -8,7 +8,13 @@ import { initRoomCards, type RoomCardMode, type RoomCardState } from "./room-car
 import { OFFICIAL_DECKS, type OfficialDeckId } from "../../src/lib/official-decks";
 import { parseDeckSnapshot, type DeckRef, type DeckSnapshot } from "../../src/lib/custom-decks";
 import { isSnookerMatch, isValidSnookerInitialReds, SNOOKER_MAX_REDS } from "../../src/lib/snooker";
+import {
+  createTeamBattleMatch,
+  isTeamBattleMatch,
+  TEAM_BATTLE_MAX_PLAYER_NAME_LENGTH,
+} from "../../src/lib/team-battle";
 import { createRealtimeSnookerState, type RealtimeSnookerState } from "./snooker-scoring";
+import type { RealtimeTeamBattleState } from "./team-battle-scoring";
 
 export type RealtimeEnv = AuthEnv & {
   MATCH_ROOM: DurableObjectNamespace<MatchRoom>;
@@ -33,6 +39,7 @@ export type RoomInitializationInput = {
   chaseScore?: ChaseScoreState;
   eightBall?: RealtimeEightBallState;
   snooker?: RealtimeSnookerState;
+  teamBattle?: RealtimeTeamBattleState;
 };
 
 type RoomInitializer<T> = {
@@ -184,6 +191,14 @@ type DirectDraft =
       location: string;
       note: string;
       cards?: DirectCardDraft;
+    }
+  | {
+      mode: "team_battle";
+      players: Array<{ name: string }>;
+      title: string;
+      location: string;
+      note: string;
+      cards?: undefined;
     };
 
 type DirectCardDraft = {
@@ -276,6 +291,21 @@ function directDraft(body: Record<string, unknown>): DirectDraft {
       cards: directCardDraft(body, 2),
     };
   }
+  if (mode === "team_battle") {
+    const names = players.map(({ name }) => name);
+    if (names.some((name) => Array.from(name).length > TEAM_BATTLE_MAX_PLAYER_NAME_LENGTH)
+      || new Set(names).size !== names.length) {
+      throw new RealtimeValidationError("players 无效");
+    }
+    const limited = (value: unknown, max: number) => typeof value === "string" ? value.trim().slice(0, max) : "";
+    return {
+      mode,
+      players: players.map(({ name }) => ({ name })),
+      title: limited(body.title, 40),
+      location: limited(body.location, 40),
+      note: limited(body.note, 120),
+    };
+  }
   if (mode !== "score" && mode !== "score_cards") throw new RealtimeValidationError("mode 无效");
   const rawRules = Array.isArray(body.rules) ? body.rules : null;
   const rules: ChaseScoreRule[] = (rawRules ?? [])
@@ -294,7 +324,20 @@ function directDraft(body: Record<string, unknown>): DirectDraft {
   return { mode, players, rules, turnStrategy, cards: directCardDraft(body, players.length) };
 }
 
-function directDraftBaseline(draft: DirectDraft, playerIds: string[], now: number): string {
+function directDraftBaseline(draft: DirectDraft, playerIds: string[], now: number, matchId: string): string {
+  if (draft.mode === "team_battle") {
+    const match = createTeamBattleMatch({
+      playerNames: draft.players.map(({ name }) => name),
+      title: draft.title,
+      location: draft.location,
+      note: draft.note,
+    }, now);
+    return JSON.stringify({
+      ...match,
+      id: matchId,
+      players: match.players.map((player, index) => ({ ...player, id: playerIds[index] })),
+    });
+  }
   if (draft.mode === "snooker") {
     const state = createRealtimeSnookerState({
       playerIds: playerIds as [string, string],
@@ -567,6 +610,31 @@ async function loadSnookerState(env: RealtimeEnv, matchId: string): Promise<Real
   };
 }
 
+async function loadTeamBattleState(env: RealtimeEnv, matchId: string): Promise<RealtimeTeamBattleState | undefined> {
+  const row = await env.DB.prepare(
+    "SELECT mode, snapshot_json FROM matches WHERE id = ?1",
+  ).bind(matchId).first<{ mode: string; snapshot_json: string | null }>();
+  if (!row || row.mode !== "team_battle" || !row.snapshot_json) return undefined;
+  let match: unknown;
+  try { match = JSON.parse(row.snapshot_json); } catch { return undefined; }
+  if (!isTeamBattleMatch(match) || match.status !== "active") return undefined;
+  const seats = await env.DB.prepare(
+    `SELECT id, user_id FROM match_players
+      WHERE match_id = ?1 AND role = 'player' ORDER BY seat_no LIMIT 8`,
+  ).bind(matchId).all<{ id: string; user_id: string | null }>();
+  if (seats.results.length < match.players.length
+    || match.players.some((player, index) => seats.results[index]?.id !== player.id)) return undefined;
+  return {
+    mode: "team_battle",
+    match,
+    seats: seats.results.slice(0, match.players.length).map((seat) => ({
+      playerId: seat.id,
+      ...(seat.user_id ? { userId: seat.user_id } : {}),
+    })),
+    currentPairIds: [match.players[0].id, match.players[1].id],
+  };
+}
+
 async function ensureHostPlayer(env: RealtimeEnv, matchId: string, userId: string, nickname: string, now: number): Promise<void> {
   const hostPlayer = await env.DB.prepare(
     "SELECT id FROM match_players WHERE match_id = ?1 AND user_id = ?2 AND left_at IS NULL LIMIT 1",
@@ -603,10 +671,11 @@ async function createRoom(request: Request, env: RealtimeEnv, context: RealtimeR
     context.reusedRoom = true;
     const now = Date.now();
     context.stage = "project_host";
-    const [chaseScore, eightBall, snooker] = await Promise.all([
+    const [chaseScore, eightBall, snooker, teamBattle] = await Promise.all([
       loadChaseScoreState(env, matchId),
       loadEightBallState(env, matchId),
       loadSnookerState(env, matchId),
+      loadTeamBattleState(env, matchId),
     ]);
     const hostNickname = session.user.nickname;
     await ensureHostPlayer(env, matchId, session.user.id, hostNickname, now);
@@ -618,6 +687,7 @@ async function createRoom(request: Request, env: RealtimeEnv, context: RealtimeR
       chaseScore,
       eightBall,
       snooker,
+      teamBattle,
     }, context);
     context.stage = "return_snapshot";
     return json({ room: { code: existing.room_code, matchId, status: existing.status }, snapshot });
@@ -642,10 +712,11 @@ async function createRoom(request: Request, env: RealtimeEnv, context: RealtimeR
   if (!roomCode) throw new Error("Unable to allocate room code");
 
   context.stage = "project_host";
-  const [chaseScore, eightBall, snooker] = await Promise.all([
+  const [chaseScore, eightBall, snooker, teamBattle] = await Promise.all([
     loadChaseScoreState(env, matchId),
     loadEightBallState(env, matchId),
     loadSnookerState(env, matchId),
+    loadTeamBattleState(env, matchId),
   ]);
   const hostNickname = session.user.nickname;
   await ensureHostPlayer(env, matchId, session.user.id, hostNickname, now);
@@ -658,6 +729,7 @@ async function createRoom(request: Request, env: RealtimeEnv, context: RealtimeR
     chaseScore,
     eightBall,
     snooker,
+    teamBattle,
   }, context);
   context.stage = "return_snapshot";
   return json({ room: { code: roomCode, matchId, status: "draft" }, snapshot }, 201);
@@ -681,10 +753,11 @@ async function createDirectRoom(request: Request, env: RealtimeEnv, context: Rea
 
   const converge = async (roomCode: string, reused: boolean): Promise<Response> => {
     context.stage = "project_host";
-    const [chaseScore, eightBall, snooker] = await Promise.all([
+    const [chaseScore, eightBall, snooker, teamBattle] = await Promise.all([
       loadChaseScoreState(env, matchId),
       loadEightBallState(env, matchId),
       loadSnookerState(env, matchId),
+      loadTeamBattleState(env, matchId),
     ]);
     const hostNickname = session.user.nickname;
     const host = { userId: session.user.id, nickname: hostNickname, role: "host" as const, joinedAt: now };
@@ -697,6 +770,7 @@ async function createDirectRoom(request: Request, env: RealtimeEnv, context: Rea
       chaseScore,
       eightBall,
       snooker,
+      teamBattle,
     }, context);
     context.stage = "return_snapshot";
     const room = { code: roomCode, matchId, status: existing?.status ?? "draft" };
@@ -724,7 +798,7 @@ async function createDirectRoom(request: Request, env: RealtimeEnv, context: Rea
     env.DB.prepare(
       `INSERT INTO matches (id, owner_user_id, mode, status, privacy, version, snapshot_json, created_at, updated_at)
        VALUES (?1, ?2, ?3, 'draft', 'private', 0, ?4, ?5, ?5)`,
-    ).bind(matchId, session.user.id, draft.mode, directDraftBaseline(draft, stablePlayerIds, now), now),
+    ).bind(matchId, session.user.id, draft.mode, directDraftBaseline(draft, stablePlayerIds, now, matchId), now),
   ];
   draft.players.forEach((player, index) => {
     statements.push(env.DB.prepare(

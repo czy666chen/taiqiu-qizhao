@@ -24,6 +24,7 @@ import {
 } from "../src/lib/team-battle";
 import { buildTeamBattleReport, buildTeamBattleReportProjection } from "../src/lib/team-battle-report";
 import { renderReportPdf, renderReportPng } from "../src/lib/json-report";
+import { currentReportTheme } from "../src/lib/report-theme";
 import { HeadToHeadScoreboard } from "./HeadToHeadScoreboard";
 import { useModalDialog } from "./useModalDialog";
 
@@ -53,7 +54,17 @@ function draftError(names: string[]) {
   return "";
 }
 
-export function TeamBattleSetupDialog({ onClose, onStart }: { onClose: () => void; onStart: (draft: TeamBattleDraft) => void }) {
+export function TeamBattleSetupDialog({
+  onClose,
+  onStart,
+  user,
+  onCloudRoomCreated,
+}: {
+  onClose: () => void;
+  onStart: (draft: TeamBattleDraft) => void;
+  user: { id: string } | null;
+  onCloudRoomCreated: (code: string, matchId: string, operationId: string) => void;
+}) {
   const dialogRef = useModalDialog(onClose);
   const errorRef = useRef<HTMLDivElement>(null);
   const [names, setNames] = useState(["成员 1", "成员 2"]);
@@ -62,6 +73,7 @@ export function TeamBattleSetupDialog({ onClose, onStart }: { onClose: () => voi
   const [note, setNote] = useState("");
   const [touched, setTouched] = useState<Record<number, boolean>>({});
   const [error, setError] = useState("");
+  const [cloudBusy, setCloudBusy] = useState(false);
   const move = (index: number, direction: -1 | 1) => {
     const target = index + direction;
     if (target < 0 || target >= names.length) return;
@@ -69,22 +81,57 @@ export function TeamBattleSetupDialog({ onClose, onStart }: { onClose: () => voi
     [next[index], next[target]] = [next[target], next[index]];
     setNames(next);
   };
-  const submit = () => {
+  const validDraft = () => {
     const message = draftError(names);
     if (message) {
       setTouched(Object.fromEntries(names.map((_, index) => [index, true])));
       setError(message);
       window.requestAnimationFrame(() => errorRef.current?.focus());
-      return;
+      return null;
     }
-    try { onStart({ playerNames: names, title, location, note }); }
+    return { playerNames: names.map((name) => name.trim()), title, location, note };
+  };
+  const submitLocal = () => {
+    const draft = validDraft();
+    if (!draft) return;
+    try { onStart(draft); }
     catch (cause) { setError(cause instanceof Error ? cause.message : "无法创建团战"); window.requestAnimationFrame(() => errorRef.current?.focus()); }
   };
+  const submitCloud = async () => {
+    const draft = validDraft();
+    if (!draft || !user || cloudBusy) return;
+    setCloudBusy(true);
+    setError("");
+    try {
+      const operationId = crypto.randomUUID();
+      const response = await fetch("/api/realtime/rooms/direct", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          operationId,
+          mode: "team_battle",
+          players: draft.playerNames.map((name) => ({ name })),
+          title: draft.title,
+          location: draft.location,
+          note: draft.note,
+        }),
+      });
+      const payload = await response.json() as { matchId?: string; room?: { code: string }; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
+      if (!payload.matchId || !payload.room?.code) throw new Error("云端房间响应不完整，请重试");
+      onCloudRoomCreated(payload.room.code, payload.matchId, operationId);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "创建云端实时房间失败");
+      window.requestAnimationFrame(() => errorRef.current?.focus());
+    } finally {
+      setCloudBusy(false);
+    }
+  };
   return <dialog ref={dialogRef} className="setup-modal team-battle-setup" aria-labelledby="team-battle-setup-title" onCancel={(event) => { event.preventDefault(); onClose(); }}>
-    <header className="modal-heading"><div><p className="kicker">TEAM BATTLE · LOCAL</p><h2 id="team-battle-setup-title">创建团战记分</h2></div><button className="icon-button" aria-label="关闭团战设置" onClick={onClose}>×</button></header>
+    <header className="modal-heading"><div><p className="kicker">TEAM BATTLE · NEW MATCH</p><h2 id="team-battle-setup-title">创建团战记分</h2></div><button className="icon-button" aria-label="关闭团战设置" onClick={onClose}>×</button></header>
     <div className="setup-body">
-      {error && <div ref={errorRef} className="team-form-error" role="alert" tabIndex={-1}>{error}。请检查成员姓名后重试。</div>}
-      <section className="setup-section"><div className="setup-title"><span>01</span><div><b>在场成员</b><small>2–8 人，仅保存在本机；可在比赛中继续加入</small></div></div>
+      {error && <div ref={errorRef} className="team-form-error" role="alert" tabIndex={-1}>{error}</div>}
+      <section className="setup-section"><div className="setup-title"><span>01</span><div><b>在场成员</b><small>2–8 人；实时房间开局后固定席位，本机团战可继续加人</small></div></div>
         <div className="team-setup-players">{names.map((name, index) => {
           const normalized = name.trim();
           const fieldError = touched[index] ? (!normalized || Array.from(normalized).length > TEAM_BATTLE_MAX_PLAYER_NAME_LENGTH ? `成员姓名必须为 1–${TEAM_BATTLE_MAX_PLAYER_NAME_LENGTH} 个字符` : names.filter((item) => item.trim() === normalized).length > 1 ? "同场成员姓名不能重复" : "") : "";
@@ -100,7 +147,7 @@ export function TeamBattleSetupDialog({ onClose, onStart }: { onClose: () => voi
       </section>
       <section className="setup-section"><div className="setup-title"><span>02</span><div><b>比赛信息</b><small>均为可选项</small></div></div><div className="eight-form-grid"><label className="wide"><span>比赛标题</span><input name="team-battle-title" autoComplete="off" maxLength={40} value={title} onChange={(event) => setTitle(event.target.value)} /></label><label><span>地点</span><input name="team-battle-location" autoComplete="off" maxLength={40} value={location} onChange={(event) => setLocation(event.target.value)} /></label><label className="wide"><span>备注</span><input name="team-battle-note" autoComplete="off" maxLength={120} value={note} onChange={(event) => setNote(event.target.value)} /></label></div></section>
     </div>
-    <footer className="modal-actions"><button className="secondary" onClick={onClose}>取消</button><button className="primary" onClick={submit}>开始本机团战</button></footer>
+    <footer className="modal-actions"><button className="secondary" disabled={cloudBusy} onClick={onClose}>取消</button>{user && <button className="secondary" disabled={cloudBusy} onClick={submitLocal}>开始本机团战</button>}<button className="primary" disabled={cloudBusy} onClick={() => user ? void submitCloud() : submitLocal()}>{cloudBusy ? "正在创建实时房间…" : user ? "创建实时房间" : "开始本机团战"}</button></footer>
   </dialog>;
 }
 
@@ -111,6 +158,100 @@ function pairStats(rounds: EffectiveTeamBattleRound[], playerId: string) {
     runout: rounds.filter((round) => round.winnerId === playerId && round.winType === "runout").length,
     fouls: rounds.reduce((sum, round) => sum + (round.fouls[playerId] ?? 0), 0),
   };
+}
+
+export type RealtimeTeamBattleState = {
+  mode: "team_battle";
+  match: TeamBattleMatch;
+  seats: Array<{ playerId: string; userId?: string }>;
+  currentPairIds: [string, string];
+};
+
+type RealtimeTeamBattleCommandPayload = Record<string, string | number | boolean | Array<string | number> | Record<string, unknown> | undefined>;
+
+export function RealtimeTeamBattlePanel({
+  state,
+  writable,
+  busy,
+  isHost,
+  onCommand,
+}: {
+  state: RealtimeTeamBattleState;
+  writable: boolean;
+  busy: boolean;
+  isHost: boolean;
+  onCommand: (kind: string, payload: RealtimeTeamBattleCommandPayload) => void;
+}) {
+  const { match, currentPairIds: pair } = state;
+  const projection = getTeamBattleProjection(match);
+  const currentPair = getPairProjection(match, pair[0], pair[1]);
+  const leftStats = pairStats(currentPair.rounds, pair[0]);
+  const rightStats = pairStats(currentPair.rounds, pair[1]);
+  const [winnerId, setWinnerId] = useState(pair[0]);
+  const [winType, setWinType] = useState<TeamBattleWinType>("normal");
+  const [fouls, setFouls] = useState<Record<string, number>>({});
+  const [note, setNote] = useState("");
+  const [roundStartedAt, setRoundStartedAt] = useState(() => Date.now());
+  const [editingEventId, setEditingEventId] = useState<string | null>(null);
+  const disabled = busy || !writable;
+  const roundDisabled = disabled || !!match.pausedAt;
+  const playerName = (id: string) => match.players.find((player) => player.id === id)?.name ?? id;
+  const resetDraft = () => {
+    setWinnerId(pair[0]);
+    setWinType("normal");
+    setFouls({});
+    setNote("");
+    setRoundStartedAt(Date.now());
+    setEditingEventId(null);
+  };
+  const changePair = (side: 0 | 1, playerId: string) => {
+    if (playerId === pair[side === 0 ? 1 : 0]) return;
+    onCommand("team_battle.pair.set", { playerIds: side === 0 ? [playerId, pair[1]] : [pair[0], playerId] });
+  };
+  const submitRound = () => onCommand(editingEventId ? "team_battle.round.correct" : "team_battle.round.record", {
+    ...(editingEventId ? { eventId: editingEventId } : {}),
+    winnerId,
+    winType,
+    fouls: Object.fromEntries(pair.map((id) => [id, Math.max(0, Math.min(99, Math.trunc(fouls[id] ?? 0)))])),
+    note,
+    startedAt: roundStartedAt,
+  });
+  const editRound = (round: EffectiveTeamBattleRound) => {
+    setWinnerId(round.winnerId);
+    setWinType(round.winType);
+    setFouls({ ...round.fouls });
+    setNote(round.note);
+    setRoundStartedAt(round.startedAt);
+    setEditingEventId(round.eventId);
+    document.querySelector(".realtime-team-battle .team-round-panel")?.scrollIntoView({ behavior: preferredScrollBehavior() });
+  };
+  const ledgerRow = (round: EffectiveTeamBattleRound, editable = false) => <article key={round.eventId}><span>第 {round.sequenceNo} 局</span><div><b>{playerName(round.playerIds[0])} vs {playerName(round.playerIds[1])}</b><small>{playerName(round.winnerId)} · {WIN_LABELS[round.winType]} · 犯规 {round.playerIds.map((id) => `${playerName(id)} ${round.fouls[id] ?? 0}`).join(" / ")}{round.note ? ` · ${round.note}` : ""}</small></div><strong>{round.after[round.playerIds[0]] ?? 0} : {round.after[round.playerIds[1]] ?? 0}</strong>{editable && isHost && <button disabled={disabled} onClick={() => editRound(round)}>更正</button>}</article>;
+  const statusMessage = !isHost
+    ? "当前为只读模式，由房主负责团战计分。"
+    : !writable
+      ? "实时连接尚未同步，所有团战写操作已暂时禁用。"
+      : match.pausedAt
+        ? "团战已暂停，可以切换对阵和查看流水；恢复后才能记分。"
+        : "已连接服务器，可以记录团战结果。";
+
+  return <section className="realtime-team-battle team-battle-page" aria-label="实时团战计分">
+    <div className="realtime-team-toolbar"><div className={`realtime-team-status ${writable ? "ready" : "readonly"}`} role="status" aria-live="polite" aria-atomic="true">{statusMessage}</div>{isHost && match.status !== "completed" && <button className="secondary" disabled={disabled} onClick={() => onCommand(match.pausedAt ? "team_battle.resume" : "team_battle.pause", {})}>{match.pausedAt ? "恢复团战" : "暂停团战"}</button>}</div>
+    <section className="team-pair-picker" aria-labelledby="realtime-team-pair-title"><div><p className="kicker">CURRENT MATCHUP · SERVER AUTHORITY</p><h2 id="realtime-team-pair-title">当前共享对阵</h2><small>切换后所有窗口同步显示同一组对阵</small></div><label><span>红方成员</span><select name="realtime-team-battle-red-player" autoComplete="off" aria-label="红方成员" disabled={disabled} value={pair[0]} onChange={(event) => changePair(0, event.target.value)}>{match.players.map((player) => <option key={player.id} value={player.id} disabled={player.id === pair[1]}>{player.name}</option>)}</select></label><b aria-hidden="true">VS</b><label><span>蓝方成员</span><select name="realtime-team-battle-blue-player" autoComplete="off" aria-label="蓝方成员" disabled={disabled} value={pair[1]} onChange={(event) => changePair(1, event.target.value)}>{match.players.map((player) => <option key={player.id} value={player.id} disabled={player.id === pair[0]}>{player.name}</option>)}</select></label><span>{currentPair.rounds.length ? `已交手 ${currentPair.rounds.length} 局` : "首次交手 · 0 : 0"}</span></section>
+    <HeadToHeadScoreboard sides={[
+      { id: pair[0], name: playerName(pair[0]), label: "RED", score: currentPair.scores[pair[0]], stats: [{ label: "普胜", value: leftStats.normal }, { label: "炸清", value: leftStats.breakClear }, { label: "接清", value: leftStats.runout }, { label: "犯规", value: leftStats.fouls }] },
+      { id: pair[1], name: playerName(pair[1]), label: "BLUE", score: currentPair.scores[pair[1]], stats: [{ label: "普胜", value: rightStats.normal }, { label: "炸清", value: rightStats.breakClear }, { label: "接清", value: rightStats.runout }, { label: "犯规", value: rightStats.fouls }] },
+    ]} />
+    <section className="team-standing-table" aria-labelledby="realtime-team-standing-title"><div className="section-heading"><div><p className="kicker">STANDINGS</p><h2 id="realtime-team-standing-title">总排行</h2></div><span>{projection.rounds.length} 局</span></div>{projection.standings.map((standing) => <article key={standing.player.id}><span>{standing.tied ? "并列 " : ""}{standing.rank}</span><b>{standing.player.name}</b><small>交手 {standing.opponentsPlayed} 人</small><strong>{standing.wins} 胜 {standing.losses} 负</strong><i>{standing.differential >= 0 ? "+" : ""}{standing.differential}</i></article>)}</section>
+    <section className="eight-round-panel team-round-panel" aria-labelledby="realtime-team-round-title"><div className="section-heading"><div><p className="kicker">{editingEventId ? "CORRECTION" : `ROUND ${projection.rounds.length + 1}`}</p><h2 id="realtime-team-round-title">{editingEventId ? "更正本局结果" : "记录本局结果"}</h2></div><button className="text-button" disabled={roundDisabled || !currentPair.rounds.length} onClick={() => onCommand("team_battle.round.undo", {})}>↶ 撤销当前组合上一局</button></div>
+      <div className="eight-winner-picker">{pair.map((id) => <button key={id} disabled={roundDisabled} className={winnerId === id ? "active" : ""} aria-pressed={winnerId === id} onClick={() => setWinnerId(id)}>{playerName(id)} 获胜</button>)}</div>
+      <div className="segmented">{Object.entries(WIN_LABELS).map(([id, label]) => <button key={id} disabled={roundDisabled} className={winType === id ? "active" : ""} aria-pressed={winType === id} onClick={() => setWinType(id as TeamBattleWinType)}>{label}</button>)}</div>
+      <div className="eight-fouls">{pair.map((id) => <label key={id}><span>{playerName(id)} 本局犯规</span><input name={`realtime-team-battle-${id}-fouls`} autoComplete="off" type="number" min="0" max="99" inputMode="numeric" disabled={roundDisabled} value={fouls[id] ?? 0} onChange={(event) => setFouls({ ...fouls, [id]: Number(event.target.value) })} /></label>)}</div>
+      <label className="score-note"><span>本局备注</span><input name="realtime-team-battle-round-note" autoComplete="off" maxLength={120} disabled={roundDisabled} placeholder="例如：关键球处理…" value={note} onChange={(event) => setNote(event.target.value)} /></label>
+      <div className="team-confirm-row">{editingEventId && <button className="secondary" disabled={roundDisabled} onClick={resetDraft}>取消更正</button>}<button className="primary eight-confirm" disabled={roundDisabled} onClick={submitRound}>{editingEventId ? "保存更正" : "确认本局"}</button></div>
+    </section>
+    <section className="eight-ledger team-pair-ledger"><div className="section-heading"><div><p className="kicker">PAIR LEDGER</p><h2>当前组合流水</h2></div><span>{currentPair.rounds.length} 局</span></div>{currentPair.rounds.length ? [...currentPair.rounds].reverse().map((round) => ledgerRow(round, true)) : <p className="team-empty-ledger">这组成员尚未交手，确认首局后会显示在这里。</p>}</section>
+    <details className="team-all-ledger"><summary>全场最近流水 <span>{projection.rounds.length} 局</span></summary><div className="eight-ledger">{projection.rounds.length ? [...projection.rounds].reverse().slice(0, 20).map((round) => ledgerRow(round)) : <p className="team-empty-ledger">本场尚无已确认的对局。</p>}</div></details>
+  </section>;
 }
 
 export function TeamBattleBoard({ match, onChange, onFinish, toast }: { match: TeamBattleMatch; onChange: (match: TeamBattleMatch) => void; onFinish: () => void; toast: (message: string) => void }) {
@@ -218,8 +359,9 @@ export function TeamBattleHistoryDetail({ match, onBack, onDelete }: { match: Te
     setExporting(format);
     setExportError("");
     try {
-      const svg = buildTeamBattleReport(match, { scope, detail });
-      downloadBlob(`${baseName}.${format}`, format === "png" ? await renderReportPng(svg) : await renderReportPdf(svg));
+      const theme = currentReportTheme();
+      const svg = buildTeamBattleReport(match, { scope, detail }, theme);
+      downloadBlob(`${baseName}.${format}`, format === "png" ? await renderReportPng(svg) : await renderReportPdf(svg, theme));
     } catch (cause) {
       setExportError(cause instanceof Error ? cause.message : "报告生成失败");
     } finally {

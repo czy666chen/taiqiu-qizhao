@@ -10,9 +10,9 @@ const baseURL = externalBaseUrl ?? "http://127.0.0.1:4173";
 
 export default defineConfig({
   testDir: "./e2e",
-  fullyParallel: true,
-  workers: process.env.CI ? 4 : 2,
-  globalTimeout: 120_000,
+  fullyParallel: !!process.env.CI,
+  workers: process.env.CI ? 4 : 1,
+  globalTimeout: 300_000,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? "github" : "list",
@@ -26,7 +26,7 @@ export default defineConfig({
     { name: "mobile-chromium", use: { ...devices["Pixel 7"], launchOptions: localLaunchOptions } },
   ],
   webServer: externalBaseUrl ? undefined : {
-    command: "npm run dev:static -- --host 127.0.0.1 --port 4173",
+    command: "node ./node_modules/vite/bin/vite.js --config vite.static.config.ts --host 127.0.0.1 --port 4173",
     url: "http://127.0.0.1:4173",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

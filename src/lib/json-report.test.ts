@@ -35,6 +35,16 @@ describe("JSON 战绩报告", () => {
     expect(buildSnookerReport(realtimeArchive, { time: true, trend: true, stats: true })).toBe(svg);
   });
 
+  it("按当前导出主题生成深色或白色系斯诺克报告", () => {
+    const match = createSnookerMatch({ playerNames: ["甲", "乙"], bestOf: 3, firstStriker: 0 }, 100);
+    const options = { time: true, trend: true, stats: true };
+    expect(buildSnookerReport(match, options, "night")).toContain('fill="#07110d"');
+    const day = buildSnookerReport(match, options, "day");
+    expect(day).toContain('fill="#fffefa"');
+    expect(day).toContain("fill:#102019");
+    expect(day).not.toContain('fill="#07110d"');
+  });
+
   it("用七色球圆形统计展示 20+ 单杆，不输出逐球事件", () => {
     let match = createSnookerMatch({ playerNames: ["甲", "乙"], bestOf: 3, firstStriker: 0 }, 100);
     for (let index = 0; index < 3; index += 1) {

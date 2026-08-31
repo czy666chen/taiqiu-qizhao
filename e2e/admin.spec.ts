@@ -106,12 +106,13 @@ test("管理后台可筛选团战并从同步快照展示最终统计与逐局�
     events: [
       { id: "round-1", sequenceNo: 1, type: "round", occurredAt: 1004, playerNames: names, round: { playerIds: ["red", "blue"], winnerId: "red", winType: "normal", fouls: { red: 0, blue: 0 }, note: "", startedAt: 1002, confirmedAt: 1004 } },
       { id: "round-2", sequenceNo: 2, type: "round", occurredAt: 1007, playerNames: names, round: { playerIds: ["red", "green"], winnerId: "green", winType: "break_clear", fouls: { red: 0, green: 0 }, note: "", startedAt: 1005, confirmedAt: 1007 } },
-      { id: "finish-1", sequenceNo: 3, type: "finish", occurredAt: 1010, playerNames: names },
+      { id: "correction-1", sequenceNo: 3, type: "correction", occurredAt: 1008, playerNames: names, correctsEventId: "round-2", replacement: { playerIds: ["red", "green"], winnerId: "red", winType: "normal", fouls: { red: 0, green: 0 }, note: "录入错误", startedAt: 1005, confirmedAt: 1008 } },
+      { id: "finish-1", sequenceNo: 4, type: "finish", occurredAt: 1010, playerNames: names },
     ],
   };
   const players = ["甲", "乙", "丙"].map((nicknameSnapshot, seatNo) => ({
     id: `stored-${seatNo}`, seatNo, userId: null, role: "player", nicknameSnapshot,
-    username: null, nickname: null, userStatus: null, finalScore: seatNo === 0 || seatNo === 2 ? 1 : 0,
+    username: null, nickname: null, userStatus: null, finalScore: seatNo === 0 ? 2 : 0,
   }));
   await page.route("**/api/admin/auth/session", (route) => route.fulfill({
     json: { admin: { id: "admin-1", username: "admin" }, session: { authenticated: true } },
@@ -140,10 +141,12 @@ test("管理后台可筛选团战并从同步快照展示最终统计与逐局�
   await page.getByRole("link", { name: /甲 · 乙 · 丙/ }).click();
   await expect(page.getByRole("heading", { name: "团战记分" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "团战最终统计" })).toBeVisible();
-  await expect(page.getByText("1 胜 1 负")).toBeVisible();
-  await expect(page.getByText("0 胜 1 负")).toBeVisible();
-  await expect(page.getByText("1 胜 0 负")).toBeVisible();
+  await expect(page.getByText("2 胜 0 负")).toBeVisible();
+  await expect(page.getByText("0 胜 1 负")).toHaveCount(2);
   await expect(page.getByRole("heading", { name: "逐局流水 · 2" })).toBeVisible();
   await expect(page.getByText("甲 胜 乙")).toBeVisible();
-  await expect(page.getByText("丙 胜 甲")).toBeVisible();
+  await expect(page.getByText("甲 胜 丙", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "更正记录 · 1" })).toBeVisible();
+  await expect(page.getByText("丙 胜 甲 → 甲 胜 丙")).toBeVisible();
+  await expect(page.getByText("round-2 → correction-1")).toBeVisible();
 });

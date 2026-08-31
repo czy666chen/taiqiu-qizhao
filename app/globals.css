@@ -251,7 +251,7 @@ button:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px 
 .page-title.split .report-controls > .export-actions { grid-column: 1; justify-content: flex-end; }
 .page-title.split .report-actions > .minor { grid-column: 2; justify-content: flex-end; }
 .room-page { padding-top: 30px; }.room-topbar { display: flex; justify-content: space-between; align-items: end; gap: 20px; padding: 24px 28px; border: 1px solid #315344; border-radius: 11px; background: radial-gradient(circle at 80% 0, #1d4c35, transparent 42%), #0f1e18; }.room-topbar h1 { margin: 8px 0 4px; font-size: 30px; }.room-topbar p { margin: 0; color: var(--muted); font-size: 12px; }.room-topbar-actions { display: flex; flex-wrap: wrap; gap: 8px; }.room-topbar-actions .danger-text { color: var(--red); }.room-entering { display: grid; min-height: 320px; place-content: center; text-align: center; }.room-dock { display: none; }
-.card-notice-backdrop { position: fixed; z-index: 80; inset: 0; display: grid; padding: 24px; place-items: center; background: #02070599; backdrop-filter: blur(3px); animation: card-notice-fade-in .18s ease-out; }
+.card-notice-backdrop { position: fixed; z-index: 80; inset: 0; display: grid; padding: 24px; place-items: center; background: #02070599; animation: card-notice-fade-in .18s ease-out; }
 .card-notice { width: min(520px, 100%); padding: 28px; border: 1px solid #4d735f; border-radius: 14px; background: radial-gradient(circle at 100% 0, #24583d, transparent 45%), #102019; box-shadow: 0 24px 70px #000b; animation: card-notice-pop-in .24s ease-out; }
 .card-notice.skip { border-color: #8b7740; background: radial-gradient(circle at 100% 0, #5a4d20, transparent 45%), #201d12; }.card-notice small { color: var(--mint); font: 700 10px "Oswald"; letter-spacing: .14em; }.card-notice.skip small { color: var(--gold); }.card-notice h2 { margin: 9px 0 0; font-size: clamp(22px, 4vw, 32px); line-height: 1.35; }.card-notice p { margin: 14px 0 0; color: #c5d5cd; font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
 @keyframes card-notice-fade-in { from { opacity: 0; } }
@@ -1313,6 +1313,14 @@ html[data-theme="day"] .quick-index { color: #91a69b; }
 .team-pair-results article > small { color: var(--muted); }
 .team-confirm-row { display: flex; justify-content: flex-end; gap: 10px; }
 .team-confirm-row .eight-confirm { width: auto; min-width: 240px; }
+.realtime-team-battle { display: grid; gap: 14px; margin-top: 14px; }
+.realtime-team-battle .team-pair-picker, .realtime-team-battle .team-standing-table, .realtime-team-battle .eight-round-panel, .realtime-team-battle .eight-ledger, .realtime-team-battle .team-all-ledger { margin: 0; }
+.realtime-team-battle .head-to-head-scoreboard { margin-bottom: 0; }
+.realtime-team-toolbar { display: flex; align-items: stretch; gap: 8px; }
+.realtime-team-toolbar .realtime-team-status { flex: 1; }
+.realtime-team-toolbar > button { min-width: 112px; }
+.realtime-team-status { padding: 12px 14px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); background: var(--panel-2); font-size: 12px; line-height: 1.6; }
+.realtime-team-status.ready { border-color: #4d8b6d; color: var(--mint); background: #10251b; }
 .team-empty-ledger { margin: 0; padding: 20px 0 6px; color: var(--muted); text-align: center; line-height: 1.7; }
 .team-all-ledger > summary { display: flex; min-height: 44px; align-items: center; justify-content: space-between; cursor: pointer; font-weight: 800; }
 .team-all-ledger > summary span { color: var(--muted); font-size: 11px; font-weight: 400; }
@@ -1322,6 +1330,8 @@ html[data-theme="day"] .team-member-panel, html[data-theme="day"] .team-pair-pic
 html[data-theme="day"] .team-form-error { border-color: #c97b70; color: #7f261f; background: #fff0ed; }
 html[data-theme="day"] .team-setup-player > input, html[data-theme="day"] .team-add-member input, html[data-theme="day"] .team-member-list input, html[data-theme="day"] .team-pair-picker select, html[data-theme="day"] .team-all-ledger select, html[data-theme="day"] .team-report-options select { border-color: #c9ded0; background: var(--panel-2); }
 html[data-theme="day"] .team-report-preview { border-color: #9bc9aa; color: #0b6838; background: #eef8f2; }
+html[data-theme="day"] .realtime-team-status { border-color: var(--line); color: var(--muted); background: var(--panel-2); }
+html[data-theme="day"] .realtime-team-status.ready { border-color: #9bc9aa; color: #0b6838; background: #eef8f2; }
 
 @media (max-width: 900px) {
   .team-pair-picker { grid-template-columns: 1fr auto 1fr; }
@@ -1360,6 +1370,18 @@ html[data-theme="day"] .team-report-preview { border-color: #9bc9aa; color: #0b6
   .team-confirm-row { display: grid; }
   .team-confirm-row .eight-confirm { width: 100%; min-width: 0; }
   .team-all-ledger > label { grid-template-columns: 1fr; }
+  .realtime-team-battle.team-battle-page { width: 100%; padding-bottom: calc(78px + env(safe-area-inset-bottom)); }
+  .realtime-team-battle .team-pair-picker { padding-inline: 10px; }
+  .realtime-team-battle .team-pair-picker > b { font-size: 14px; }
+  .realtime-team-toolbar { align-items: stretch; flex-direction: column; }
+  .realtime-team-toolbar > button { min-height: 44px; }
+}
+
+@media (max-width: 340px) {
+  .realtime-team-battle .team-pair-picker { grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr); gap: 5px; }
+  .realtime-team-battle .team-pair-picker label { font-size: 10px; }
+  .realtime-team-battle .team-pair-picker select { padding-inline: 4px; }
+  .realtime-team-battle .eight-winner-picker { grid-template-columns: 1fr; }
 }
 
 @media (max-height: 520px) and (orientation: landscape) {

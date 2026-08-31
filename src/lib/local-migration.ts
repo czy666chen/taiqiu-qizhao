@@ -1,6 +1,7 @@
 import type { EightBallMatch } from "./eight-ball";
 import type { BilliardsMatch, MatchCardState } from "./match";
 import type { SnookerMatch } from "./snooker";
+import type { TeamBattleMatch } from "./team-battle";
 import {
   AppData,
   APP_STORAGE_KEY,
@@ -35,6 +36,7 @@ export type PreparedLocalMigration = {
 };
 
 const MIGRATION_KEYS = new Set([APP_STORAGE_KEY, EIGHT_BALL_LAYOUT_KEY, "billiards-trick-cards:v2", "neon-pool-cards:v1"]);
+type MigratableMatch = BilliardsMatch | EightBallMatch | SnookerMatch | TeamBattleMatch;
 
 async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -50,8 +52,7 @@ async function stableUuid(namespace: string, localId: string): Promise<string> {
   return `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`;
 }
 
-function collectMatches(data: AppData): (BilliardsMatch | EightBallMatch | SnookerMatch)[] {
-  // Team battles stay in the raw local backup but never become cloud migration resources.
+function collectMatches(data: AppData): MigratableMatch[] {
   const candidates = [
     data.activeMatch,
     ...data.history,
@@ -61,11 +62,13 @@ function collectMatches(data: AppData): (BilliardsMatch | EightBallMatch | Snook
     ...data.eightBallHistory,
     data.activeSnookerMatch,
     ...data.snookerHistory,
-  ].filter((match): match is BilliardsMatch | EightBallMatch | SnookerMatch => match !== null);
+    data.activeTeamBattleMatch,
+    ...data.teamBattleHistory,
+  ].filter((match): match is MigratableMatch => match !== null);
   return [...new Map(candidates.map((match) => [match.id, match])).values()];
 }
 
-function collectDecks(matches: (BilliardsMatch | EightBallMatch | SnookerMatch)[]) {
+function collectDecks(matches: MigratableMatch[]) {
   const decks = new Map<string, MatchCardState["deckSnapshot"]>();
   for (const match of matches) {
     if ("cards" in match && match.cards?.deckSnapshot) {
@@ -76,7 +79,7 @@ function collectDecks(matches: (BilliardsMatch | EightBallMatch | SnookerMatch)[
   return [...decks.entries()].map(([localId, snapshot]) => ({ localId, snapshot }));
 }
 
-function playerNames(matches: (BilliardsMatch | EightBallMatch | SnookerMatch)[]): string[] {
+function playerNames(matches: MigratableMatch[]): string[] {
   const names = new Map<string, string>();
   for (const match of matches) {
     for (const player of match.players) {
@@ -119,7 +122,7 @@ export async function prepareLocalMigration(store: VersionedLocalStore, now = Da
     ...decks.map((deck) => resource("deck", deck.localId, deck.snapshot)),
     ...matches.map((match) => resource("match", match.id, match)),
   ]);
-  const eightBallRounds = matches.reduce((total, match) => total + ("schemaVersion" in match
+  const eightBallRounds = matches.reduce((total, match) => total + (match.mode === "chinese_eight"
     ? match.events.filter((event) => event.type === "round").length
     : 0), 0);
 

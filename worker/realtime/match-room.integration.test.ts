@@ -6,6 +6,12 @@ import { initializeRoomWithRetry, type RealtimeRequestContext, type RoomInitiali
 import { initRoomCards, redealRoomCards } from "./room-cards";
 import { parseDeckSnapshot } from "../../src/lib/custom-decks";
 import { createRealtimeSnookerState } from "./snooker-scoring";
+import {
+  createTeamBattleMatch,
+  finishTeamBattleMatch,
+  getTeamBattleProjection,
+  isTeamBattleMatch,
+} from "../../src/lib/team-battle";
 
 declare const __D1_MIGRATIONS__: D1Migration[];
 
@@ -349,21 +355,24 @@ describe("R4 MatchRoom Durable Object", () => {
     expect(sync.snapshot.chaseScore?.currentPlayerId).toBe("player-2");
   });
 
-  it("keeps fifteen simultaneous websocket clients on one ordered room state", async () => {
+  it("keeps fifteen team-battle websocket clients on one ordered room state and rejects non-host writes", async () => {
     const room = env.MATCH_ROOM.getByName("match-room-fifteen-clients");
+    const match = createTeamBattleMatch({
+      playerNames: Array.from({ length: 8 }, (_, index) => `成员${index + 1}`),
+      title: "十五连接团战",
+      location: "",
+      note: "",
+    }, 1);
+    const [firstId, secondId] = match.players.map((player) => player.id);
     await room.initialize({
-      matchId: crypto.randomUUID(),
+      matchId: match.id,
       roomCode: "CAP234",
       host: { userId: "user-0", nickname: "Host", role: "host", joinedAt: 1 },
-      chaseScore: {
-        mode: "score",
-        players: [
-          { id: "player-1", nickname: "A", initialScore: 0, score: 0, active: true },
-          { id: "player-2", nickname: "B", initialScore: 0, score: 0, active: true },
-        ],
-        rules: [{ id: "win", label: "普胜", value: 1, kind: "gain", enabled: true }],
-        currentPlayerId: "player-1",
-        turnStrategy: "fixed",
+      teamBattle: {
+        mode: "team_battle",
+        match,
+        seats: match.players.map((player) => ({ playerId: player.id })),
+        currentPairIds: [firstId, secondId],
       },
     });
     for (let index = 1; index < 15; index += 1) {
@@ -412,14 +421,33 @@ describe("R4 MatchRoom Durable Object", () => {
       type: "command",
       operationId: "capacity-score",
       expectedVersion: 14,
-      kind: "score.apply",
-      payload: { playerId: "player-1", ruleId: "win" },
+      kind: "team_battle.round.record",
+      payload: { winnerId: firstId, winType: "normal", fouls: {} },
     }));
 
     await expect(hostResult).resolves.toMatchObject({ type: "command-result", result: { ok: true, version: 15 } });
     const broadcasts = await Promise.all(broadcastFrames);
     expect(broadcasts).toHaveLength(14);
-    expect(broadcasts.every((frame) => frame.type === "event" && frame.version === 15)).toBe(true);
+    expect(broadcasts.every((frame) => frame.type === "event" && frame.version === 15
+      && (frame.event as { kind?: string }).kind === "team_battle.round.recorded")).toBe(true);
+    const rejected = new Promise<Record<string, unknown>>((resolve) => {
+      sockets[1].addEventListener("message", (event) => resolve(JSON.parse(String(event.data)) as Record<string, unknown>), { once: true });
+    });
+    sockets[1].send(JSON.stringify({
+      type: "command",
+      operationId: "capacity-non-host-write",
+      expectedVersion: 15,
+      kind: "team_battle.pair.set",
+      payload: { playerIds: [secondId, firstId] },
+    }));
+    await expect(rejected).resolves.toMatchObject({
+      type: "command-result",
+      result: { ok: false, code: "forbidden", currentVersion: 15 },
+    });
+    await expect(room.getSnapshot()).resolves.toMatchObject({
+      version: 15,
+      teamBattle: { match: { events: [expect.objectContaining({ type: "round" })] } },
+    });
     for (const socket of sockets) socket.close(1000, "test complete");
   });
 
@@ -1564,23 +1592,25 @@ describe("R4 MatchRoom Durable Object", () => {
     })).resolves.toEqual({ ok: false, code: "invalid_command", currentVersion: 2 });
   });
 
-  it("keeps a failed D1 archive pending and completes it through the durable alarm", async () => {
+  it("keeps a failed team-battle archive pending and completes it through the durable alarm", async () => {
     const host = await register("alarm_archive_host");
     const matchId = crypto.randomUUID();
     const room = env.MATCH_ROOM.getByName(matchId);
+    const match = createTeamBattleMatch({
+      playerNames: ["甲", "乙"],
+      title: "归档重试团战",
+      location: "",
+      note: "",
+    }, 1);
     await room.initialize({
       matchId,
       roomCode: "ALM234",
       host: { userId: host.userId, nickname: "Host", role: "host", joinedAt: 1 },
-      chaseScore: {
-        mode: "score",
-        players: [
-          { id: "stable-a", nickname: "甲", initialScore: 0, score: 0, active: true },
-          { id: "stable-b", nickname: "乙", initialScore: 0, score: 0, active: true },
-        ],
-        rules: [{ id: "win", label: "普胜", value: 1, kind: "gain", enabled: true }],
-        currentPlayerId: "stable-a",
-        turnStrategy: "fixed",
+      teamBattle: {
+        mode: "team_battle",
+        match: { ...match, id: matchId },
+        seats: match.players.map((player) => ({ playerId: player.id })),
+        currentPairIds: [match.players[0].id, match.players[1].id],
       },
     });
     await expect(room.complete({
@@ -1590,7 +1620,7 @@ describe("R4 MatchRoom Durable Object", () => {
     })).resolves.toMatchObject({ ok: true, version: 1, archivePending: true });
 
     await env.DB.prepare(
-      "INSERT INTO matches (id, owner_user_id, mode, status, privacy) VALUES (?1, ?2, 'score', 'active', 'private')",
+      "INSERT INTO matches (id, owner_user_id, mode, status, privacy) VALUES (?1, ?2, 'team_battle', 'active', 'private')",
     ).bind(matchId, host.userId).run();
     await env.DB.prepare(
       "INSERT INTO realtime_rooms (match_id, room_code, status) VALUES (?1, 'ALM234', 'archiving_failed')",
@@ -1603,6 +1633,9 @@ describe("R4 MatchRoom Durable Object", () => {
     await expect(env.DB.prepare(
       "SELECT status FROM matches WHERE id = ?1",
     ).bind(matchId).first<string>("status")).resolves.toBe("completed");
+    const archived = await env.DB.prepare("SELECT snapshot_json FROM matches WHERE id = ?1")
+      .bind(matchId).first<string>("snapshot_json");
+    expect(isTeamBattleMatch(JSON.parse(archived!))).toBe(true);
     await expect(room.retryArchive()).resolves.toBe(true);
   });
 
@@ -1676,6 +1709,140 @@ describe("R4 MatchRoom Durable Object", () => {
       { seat_no: 2, role: "player", user_id: null, nickname_snapshot: "丙" },
       { seat_no: 3, role: "host", user_id: host.userId, nickname_snapshot: "direct_host" },
     ]);
+  });
+
+  it("creates, claims, renames, scores, and archives a realtime team battle", async () => {
+    const host = await register("team_room_host");
+    const guest = await register("team_room_guest");
+    const draft = {
+      operationId: "team-room-direct-1",
+      mode: "team_battle",
+      players: [{ name: "甲" }, { name: "乙" }],
+      title: "周末团战",
+      location: "八号桌",
+      note: "阶段二集成样例",
+    };
+    const created = await SELF.fetch("http://example.com/api/realtime/rooms/direct", {
+      method: "POST",
+      headers: { Cookie: host.cookie, Origin: "http://example.com", "Content-Type": "application/json" },
+      body: JSON.stringify(draft),
+    });
+    expect(created.status).toBe(201);
+    const payload = await created.json() as {
+      matchId: string;
+      room: { code: string };
+      reused: boolean;
+      snapshot: {
+        version: number;
+        teamBattle: {
+          match: ReturnType<typeof createTeamBattleMatch>;
+          seats: Array<{ playerId: string; userId?: string }>;
+          currentPairIds: [string, string];
+        };
+      };
+    };
+    expect(payload.reused).toBe(false);
+    expect(isTeamBattleMatch(payload.snapshot.teamBattle.match)).toBe(true);
+    expect(payload.snapshot.teamBattle.match).toMatchObject({
+      id: payload.matchId,
+      mode: "team_battle",
+      status: "active",
+      title: "周末团战",
+      location: "八号桌",
+      note: "阶段二集成样例",
+      players: [{ name: "甲" }, { name: "乙" }],
+    });
+    expect(payload.snapshot.teamBattle.seats.map(({ playerId }) => playerId))
+      .toEqual(payload.snapshot.teamBattle.match.players.map(({ id }) => id));
+
+    const repeated = await SELF.fetch("http://example.com/api/realtime/rooms/direct", {
+      method: "POST",
+      headers: { Cookie: host.cookie, Origin: "http://example.com", "Content-Type": "application/json" },
+      body: JSON.stringify(draft),
+    });
+    expect(repeated.status).toBe(200);
+    await expect(repeated.json()).resolves.toMatchObject({
+      matchId: payload.matchId,
+      room: { code: payload.room.code },
+      reused: true,
+      snapshot: { version: 0, teamBattle: { match: { id: payload.matchId } } },
+    });
+
+    await SELF.fetch(`http://example.com/api/realtime/rooms/${payload.room.code}/join`, {
+      method: "POST",
+      headers: { Cookie: guest.cookie, Origin: "http://example.com", "Content-Type": "application/json" },
+      body: JSON.stringify({ operationId: "team-room-join" }),
+    });
+    const promoted = await SELF.fetch(`http://example.com/api/realtime/rooms/${payload.room.code}/members/${guest.userId}`, {
+      method: "PATCH",
+      headers: { Cookie: host.cookie, Origin: "http://example.com", "Content-Type": "application/json" },
+      body: JSON.stringify({ operationId: "team-room-promote", expectedVersion: 1, role: "player" }),
+    });
+    expect(promoted.status).toBe(200);
+
+    const [firstId, secondId] = payload.snapshot.teamBattle.match.players.map(({ id }) => id);
+    const claimed = await SELF.fetch(`http://example.com/api/realtime/rooms/${payload.room.code}/players/${firstId}/claim`, {
+      method: "POST",
+      headers: { Cookie: host.cookie, Origin: "http://example.com", "Content-Type": "application/json" },
+      body: JSON.stringify({ operationId: "team-room-claim", expectedVersion: 2, userId: guest.userId }),
+    });
+    expect(claimed.status).toBe(200);
+    await expect(claimed.json()).resolves.toMatchObject({
+      version: 3,
+      event: { kind: "player.claimed", payload: { playerId: firstId, userId: guest.userId, nickname: "team_room_guest" } },
+    });
+    await expect(env.MATCH_ROOM.getByName(payload.matchId).getSnapshot()).resolves.toMatchObject({
+      teamBattle: { match: { players: [{ id: firstId, name: "team_room_guest" }, { id: secondId, name: "乙" }] } },
+    });
+
+    const renamed = await SELF.fetch(`http://example.com/api/realtime/rooms/${payload.room.code}/players/${secondId}/name`, {
+      method: "PATCH",
+      headers: { Cookie: host.cookie, Origin: "http://example.com", "Content-Type": "application/json" },
+      body: JSON.stringify({ operationId: "team-room-rename", expectedVersion: 3, nickname: "小乙" }),
+    });
+    expect(renamed.status).toBe(200);
+    await expect(renamed.json()).resolves.toMatchObject({
+      version: 4,
+      event: { kind: "player.renamed", payload: { playerId: secondId, nickname: "小乙", previousNickname: "乙" } },
+    });
+
+    const room = env.MATCH_ROOM.getByName(payload.matchId);
+    await expect(room.submitCommand({
+      operationId: "team-room-pair", expectedVersion: 4, actorUserId: host.userId,
+      kind: "team_battle.pair.set", payload: { playerIds: [firstId, secondId] },
+    })).resolves.toMatchObject({ ok: true, version: 5, event: { kind: "team_battle.pair.changed" } });
+    await expect(room.submitCommand({
+      operationId: "team-room-round", expectedVersion: 5, actorUserId: host.userId,
+      kind: "team_battle.round.record", payload: { winnerId: firstId, winType: "break_clear", fouls: { [secondId]: 1 } },
+    })).resolves.toMatchObject({ ok: true, version: 6, event: { kind: "team_battle.round.recorded" } });
+
+    const completed = await SELF.fetch(`http://example.com/api/realtime/rooms/${payload.room.code}/complete`, {
+      method: "POST",
+      headers: { Cookie: host.cookie, Origin: "http://example.com", "Content-Type": "application/json" },
+      body: JSON.stringify({ operationId: "team-room-complete", expectedVersion: 6 }),
+    });
+    expect(completed.status).toBe(200);
+    await expect(completed.json()).resolves.toMatchObject({ ok: true, version: 7, archivePending: false });
+
+    const archived = await env.DB.prepare(
+      "SELECT status, snapshot_json FROM matches WHERE id = ?1",
+    ).bind(payload.matchId).first<{ status: string; snapshot_json: string }>();
+    const archivedMatch = JSON.parse(archived!.snapshot_json) as ReturnType<typeof createTeamBattleMatch> & {
+      realtimeArchive: { roomCode: string; version: number; seats: Array<{ playerId: string; userId?: string }> };
+    };
+    expect(archived?.status).toBe("completed");
+    expect(isTeamBattleMatch(archivedMatch)).toBe(true);
+    expect(archivedMatch).toMatchObject({
+      id: payload.matchId,
+      status: "completed",
+      realtimeArchive: { roomCode: payload.room.code, version: 7 },
+    });
+    expect(archivedMatch.players.map(({ id, name }) => ({ id, name }))).toEqual([
+      { id: firstId, name: "team_room_guest" },
+      { id: secondId, name: "小乙" },
+    ]);
+    expect(archivedMatch.realtimeArchive.seats).toContainEqual({ playerId: firstId, userId: guest.userId });
+    expect(getTeamBattleProjection(archivedMatch).pairs[0].scores).toEqual({ [firstId]: 1, [secondId]: 0 });
   });
 
   it("creates a Chinese-eight room directly with two stable seats", async () => {
@@ -1758,6 +1925,10 @@ describe("R4 MatchRoom Durable Object", () => {
       { body: { operationId: "bad-3", mode: "score", players: [{ name: "A" }, { name: "B" }], rules: [], turnStrategy: "fixed" }, status: 400 },
       { body: { operationId: "bad-4", mode: "chinese_eight", players: [{ name: "A" }, { name: "B" }, { name: "C" }], raceTo: 5, serveRule: "alternate", firstServer: 0 }, status: 400 },
       { body: { operationId: "bad-5", mode: "score", players: [{ name: "A" }, { name: "B" }], rules: [{ id: "r", label: "x", value: -1, kind: "gain", enabled: true }], turnStrategy: "fixed" }, status: 400 },
+      { body: { operationId: "bad-team-1", mode: "team_battle", players: [{ name: "A" }] }, status: 400 },
+      { body: { operationId: "bad-team-2", mode: "team_battle", players: Array.from({ length: 9 }, (_, index) => ({ name: `成员${index}` })) }, status: 400 },
+      { body: { operationId: "bad-team-3", mode: "team_battle", players: [{ name: "重复" }, { name: "重复" }] }, status: 400 },
+      { body: { operationId: "bad-team-4", mode: "team_battle", players: [{ name: "A".repeat(21) }, { name: "B" }] }, status: 400 },
     ];
     for (const { body, status } of cases) {
       const response = await SELF.fetch("http://example.com/api/realtime/rooms/direct", {
@@ -2198,7 +2369,132 @@ describe("R4 MatchRoom Durable Object", () => {
     });
   });
 
-  it("upgrades the legacy room_game_state constraint without losing its state", async () => {
+  it("runs the eight-player realtime team-battle golden protocol with stable versions and errors", async () => {
+    const room = env.MATCH_ROOM.getByName(`team-battle-golden-${crypto.randomUUID()}`);
+    const match = createTeamBattleMatch({
+      playerNames: Array.from({ length: 8 }, (_, index) => `成员${index + 1}`),
+      title: "八人综合样例",
+      location: "球房",
+      note: "实时协议黄金样例",
+    }, 1_000);
+    const [firstId, secondId, thirdId] = match.players.map((player) => player.id);
+    const initialized = await room.initialize({
+      matchId: match.id,
+      roomCode: "TB1234",
+      host: { userId: "team-host", nickname: "房主", role: "host", joinedAt: 1_000 },
+      teamBattle: {
+        mode: "team_battle",
+        match,
+        seats: match.players.map((player) => ({ playerId: player.id })),
+        currentPairIds: [firstId, secondId],
+      },
+    });
+    expect(initialized).toMatchObject({ version: 0, teamBattle: { currentPairIds: [firstId, secondId] } });
+    expect(initialized.chaseScore).toBeNull();
+    expect(initialized.eightBall).toBeNull();
+    expect(initialized.snooker).toBeNull();
+
+    await expect(room.submitCommand({
+      operationId: "pair-same", expectedVersion: 0, actorUserId: "team-host",
+      kind: "team_battle.pair.set", payload: { playerIds: [firstId, firstId] },
+    })).resolves.toEqual({ ok: false, code: "invalid_command", currentVersion: 0 });
+    await expect(room.submitCommand({
+      operationId: "pair-missing", expectedVersion: 0, actorUserId: "team-host",
+      kind: "team_battle.pair.set", payload: { playerIds: [firstId, "missing"] },
+    })).resolves.toEqual({ ok: false, code: "not_found", currentVersion: 0 });
+    await expect(room.submitCommand({
+      operationId: "round-bad-winner", expectedVersion: 0, actorUserId: "team-host",
+      kind: "team_battle.round.record", payload: { winnerId: "missing", winType: "normal", fouls: {} },
+    })).resolves.toEqual({ ok: false, code: "not_found", currentVersion: 0 });
+    await expect(room.submitCommand({
+      operationId: "round-bad-foul", expectedVersion: 0, actorUserId: "team-host",
+      kind: "team_battle.round.record", payload: { winnerId: firstId, winType: "normal", fouls: { missing: 1 } },
+    })).resolves.toEqual({ ok: false, code: "invalid_command", currentVersion: 0 });
+
+    await expect(room.submitCommand({
+      operationId: "pair-set", expectedVersion: 0, actorUserId: "team-host",
+      kind: "team_battle.pair.set", payload: { playerIds: [firstId, secondId] },
+    })).resolves.toMatchObject({ ok: true, duplicate: false, version: 1, event: { kind: "team_battle.pair.changed" } });
+    const recorded = await room.submitCommand({
+      operationId: "round-record", expectedVersion: 1, actorUserId: "team-host",
+      kind: "team_battle.round.record", payload: { winnerId: firstId, winType: "normal", fouls: { [secondId]: 1 }, note: "首局" },
+    });
+    expect(recorded).toMatchObject({ ok: true, duplicate: false, version: 2, event: { kind: "team_battle.round.recorded" } });
+    await expect(room.submitCommand({
+      operationId: "round-record", expectedVersion: 1, actorUserId: "team-host",
+      kind: "team_battle.round.record", payload: { winnerId: firstId, winType: "normal", fouls: {} },
+    })).resolves.toMatchObject({ ok: true, duplicate: true, version: 2 });
+    await expect(room.submitCommand({
+      operationId: "round-stale", expectedVersion: 1, actorUserId: "team-host",
+      kind: "team_battle.round.record", payload: { winnerId: firstId, winType: "normal", fouls: {} },
+    })).resolves.toEqual({ ok: false, code: "version_conflict", currentVersion: 2 });
+    let snapshot = await room.getSnapshot();
+    expect(getTeamBattleProjection(snapshot.teamBattle!.match).pairs[0].scores).toEqual({ [firstId]: 1, [secondId]: 0 });
+
+    const roundEventId = snapshot.teamBattle!.match.events[0].id;
+    await expect(room.submitCommand({
+      operationId: "round-correct", expectedVersion: 2, actorUserId: "team-host",
+      kind: "team_battle.round.correct",
+      payload: { eventId: roundEventId, winnerId: secondId, winType: "runout", fouls: { [firstId]: 1 }, note: "改判" },
+    })).resolves.toMatchObject({ ok: true, version: 3, event: { kind: "team_battle.round.corrected" } });
+    snapshot = await room.getSnapshot();
+    expect(getTeamBattleProjection(snapshot.teamBattle!.match).pairs[0].scores).toEqual({ [firstId]: 0, [secondId]: 1 });
+
+    await expect(room.submitCommand({
+      operationId: "round-undo", expectedVersion: 3, actorUserId: "team-host",
+      kind: "team_battle.round.undo", payload: {},
+    })).resolves.toMatchObject({ ok: true, version: 4, event: { kind: "team_battle.round.corrected" } });
+    await expect(room.submitCommand({
+      operationId: "pause", expectedVersion: 4, actorUserId: "team-host",
+      kind: "team_battle.pause", payload: {},
+    })).resolves.toMatchObject({ ok: true, version: 5, event: { kind: "team_battle.paused" } });
+    await expect(room.submitCommand({
+      operationId: "record-paused", expectedVersion: 5, actorUserId: "team-host",
+      kind: "team_battle.round.record", payload: { winnerId: firstId, winType: "normal", fouls: {} },
+    })).resolves.toEqual({ ok: false, code: "invalid_command", currentVersion: 5 });
+    await expect(room.submitCommand({
+      operationId: "resume", expectedVersion: 5, actorUserId: "team-host",
+      kind: "team_battle.resume", payload: {},
+    })).resolves.toMatchObject({ ok: true, version: 6, event: { kind: "team_battle.resumed" } });
+
+    await expect(room.submitCommand({
+      operationId: "repeat-first", expectedVersion: 6, actorUserId: "team-host",
+      kind: "team_battle.round.record", payload: { winnerId: firstId, winType: "normal", fouls: {} },
+    })).resolves.toMatchObject({ ok: true, version: 7 });
+    await expect(room.submitCommand({
+      operationId: "repeat-second", expectedVersion: 7, actorUserId: "team-host",
+      kind: "team_battle.round.record", payload: { winnerId: secondId, winType: "break_clear", fouls: {} },
+    })).resolves.toMatchObject({ ok: true, version: 8 });
+    await expect(room.submitCommand({
+      operationId: "pair-third", expectedVersion: 8, actorUserId: "team-host",
+      kind: "team_battle.pair.set", payload: { playerIds: [firstId, thirdId] },
+    })).resolves.toMatchObject({ ok: true, version: 9 });
+    await expect(room.submitCommand({
+      operationId: "third-wins", expectedVersion: 9, actorUserId: "team-host",
+      kind: "team_battle.round.record", payload: { winnerId: thirdId, winType: "runout", fouls: { [firstId]: 2 } },
+    })).resolves.toMatchObject({ ok: true, version: 10 });
+
+    await room.addMember({ operationId: "team-player-join", expectedVersion: 10, userId: "team-player", nickname: "成员", role: "player", joinedAt: 2_000 });
+    await expect(room.submitCommand({
+      operationId: "team-player-write", expectedVersion: 11, actorUserId: "team-player",
+      kind: "team_battle.pair.set", payload: { playerIds: [firstId, secondId] },
+    })).resolves.toEqual({ ok: false, code: "forbidden", currentVersion: 11 });
+
+    snapshot = await room.getSnapshot();
+    expect(snapshot.version).toBe(11);
+    const projection = getTeamBattleProjection(snapshot.teamBattle!.match);
+    expect(projection.rounds).toHaveLength(3);
+    expect(projection.pairs.map((pair) => pair.scores)).toEqual(expect.arrayContaining([
+      { [firstId]: 1, [secondId]: 1 },
+      { [firstId]: 0, [thirdId]: 1 },
+    ]));
+    expect(snapshot.teamBattle!.seats).toHaveLength(8);
+    const archivedMatch = finishTeamBattleMatch(snapshot.teamBattle!.match, 3_000);
+    expect(isTeamBattleMatch(archivedMatch)).toBe(true);
+    expect(archivedMatch).toMatchObject({ mode: "team_battle", status: "completed", endedAt: 3_000 });
+  });
+
+  it("upgrades the legacy room_game_state constraint to v3 without losing its state", async () => {
     const room = env.MATCH_ROOM.getByName(`legacy-schema-${crypto.randomUUID()}`);
     await runInDurableObject(room, async (instance, state) => {
       state.storage.sql.exec(`
@@ -2215,9 +2511,9 @@ describe("R4 MatchRoom Durable Object", () => {
       expect(state.storage.sql.exec<{ mode: string; state_json: string }>("SELECT mode, state_json FROM room_game_state").toArray()).toEqual([
         { mode: "score", state_json: '{"mode":"score"}' },
       ]);
-      state.storage.sql.exec("UPDATE room_game_state SET mode = 'snooker', state_json = '{\"mode\":\"snooker\"}' WHERE singleton = 1");
-      expect(state.storage.sql.exec<{ mode: string }>("SELECT mode FROM room_game_state").one().mode).toBe("snooker");
-      expect(state.storage.sql.exec<{ version: number }>("SELECT version FROM room_schema_versions WHERE name = 'room_game_state'").one().version).toBe(2);
+      state.storage.sql.exec("UPDATE room_game_state SET mode = 'team_battle', state_json = '{\"mode\":\"team_battle\"}' WHERE singleton = 1");
+      expect(state.storage.sql.exec<{ mode: string }>("SELECT mode FROM room_game_state").one().mode).toBe("team_battle");
+      expect(state.storage.sql.exec<{ version: number }>("SELECT version FROM room_schema_versions WHERE name = 'room_game_state'").one().version).toBe(3);
     });
   });
 

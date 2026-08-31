@@ -28,7 +28,7 @@
     "test": "vitest run --config vitest.config.ts",
     "test:worker": "cross-env WRANGLER_WRITE_LOGS=false WRANGLER_LOG_PATH=.wrangler/logs XDG_CONFIG_HOME=.wrangler/xdg vitest run --config vitest.worker.config.ts",
     "test:all": "npm run test && npm run test:worker",
-    "test:e2e": "playwright test",
+    "test:e2e": "playwright test --project=desktop-chromium && playwright test --project=mobile-chromium",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .wrangler --ignore-pattern worker-configuration.d.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply DB --local --env local",

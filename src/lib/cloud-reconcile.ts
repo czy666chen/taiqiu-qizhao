@@ -2,8 +2,9 @@ import { isEightBallMatch, type EightBallMatch } from "./eight-ball";
 import { isStoredMatch, type BilliardsMatch } from "./match";
 import type { AppData } from "./local-storage";
 import { isSnookerMatch, type SnookerMatch } from "./snooker";
+import { isTeamBattleMatch, type TeamBattleMatch } from "./team-battle";
 
-export type CloudMatchSnapshot = BilliardsMatch | EightBallMatch | SnookerMatch;
+export type CloudMatchSnapshot = BilliardsMatch | EightBallMatch | SnookerMatch | TeamBattleMatch;
 
 export function reconcileCloudMatches(
   data: AppData,
@@ -16,6 +17,21 @@ export function reconcileCloudMatches(
     // A locally deleted record must win over any (older) cloud snapshot so
     // sync can never resurrect it.
     if (deleted.has(snapshot.id)) continue;
+    if (isTeamBattleMatch(snapshot)) {
+      const localActive = next.activeTeamBattleMatch?.id === snapshot.id ? next.activeTeamBattleMatch : null;
+      if (snapshot.status === "completed") {
+        const existing = next.teamBattleHistory.find((item) => item.id === snapshot.id);
+        if (!localActive && existing && JSON.stringify(existing) === JSON.stringify(snapshot)) continue;
+        next = {
+          ...next,
+          activeTeamBattleMatch: localActive ? null : next.activeTeamBattleMatch,
+          teamBattleHistory: [snapshot, ...next.teamBattleHistory.filter((item) => item.id !== snapshot.id)],
+        };
+      } else if (localActive && JSON.stringify(localActive) !== JSON.stringify(snapshot)) {
+        next = { ...next, activeTeamBattleMatch: snapshot };
+      }
+      continue;
+    }
     if (isSnookerMatch(snapshot)) {
       const localActive = next.activeSnookerMatch?.id === snapshot.id ? next.activeSnookerMatch : null;
       if (snapshot.status === "completed") {

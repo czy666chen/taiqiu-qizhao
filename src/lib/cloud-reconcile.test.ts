@@ -3,6 +3,7 @@ import { createEightBallMatch, finishEightBallMatch } from "./eight-ball";
 import { EMPTY_APP_DATA } from "./local-storage";
 import { reconcileCloudMatches } from "./cloud-reconcile";
 import { createSnookerMatch, recordSnookerCommand } from "./snooker";
+import { createTeamBattleMatch, finishTeamBattleMatch } from "./team-battle";
 
 describe("cloud match reconciliation", () => {
   it("moves a stale active match to history when another device completed it", () => {
@@ -32,5 +33,14 @@ describe("cloud match reconciliation", () => {
     const archived = reconcileCloudMatches(updated, [completed]);
     expect(archived.activeSnookerMatch).toBeNull();
     expect(archived.snookerHistory).toEqual([completed]);
+  });
+
+  it("restores a completed realtime team battle into local history", () => {
+    const active = createTeamBattleMatch({ playerNames: ["甲", "乙"] }, 100);
+    const completed = finishTeamBattleMatch(active, 500);
+    const result = reconcileCloudMatches({ ...EMPTY_APP_DATA, activeTeamBattleMatch: active }, [completed]);
+    expect(result.activeTeamBattleMatch).toBeNull();
+    expect(result.teamBattleHistory).toEqual([completed]);
+    expect(reconcileCloudMatches(result, [completed])).toBe(result);
   });
 });

@@ -15,6 +15,12 @@ import {
   type RealtimeSnookerState,
 } from "./snooker-scoring";
 import { recordSnookerCommand } from "../../src/lib/snooker";
+import {
+  finishTeamBattleMatch,
+  isTeamBattleMatch,
+  renameTeamBattlePlayer,
+} from "../../src/lib/team-battle";
+import { projectTeamBattleCommand, type RealtimeTeamBattleState } from "./team-battle-scoring";
 
 export type RoomRole = "host" | "player" | "spectator";
 export type RoomPayload = JsonObject;
@@ -56,6 +62,7 @@ export type RoomSnapshot = {
   chaseScore: ChaseScoreState | null;
   eightBall: RealtimeEightBallState | null;
   snooker: RealtimeSnookerState | null;
+  teamBattle: RealtimeTeamBattleState | null;
 };
 
 export type RoomSync = {
@@ -108,7 +115,7 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
         );
         CREATE TABLE IF NOT EXISTS room_game_state (
           singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-          mode TEXT NOT NULL CHECK (mode IN ('score', 'score_cards', 'eight_ball', 'snooker')),
+          mode TEXT NOT NULL CHECK (mode IN ('score', 'score_cards', 'eight_ball', 'snooker', 'team_battle')),
           state_json TEXT NOT NULL CHECK (json_valid(state_json)),
           updated_at INTEGER NOT NULL
         );
@@ -135,24 +142,24 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
     const schema = this.ctx.storage.sql.exec<{ sql: string }>(
       "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'room_game_state'",
     ).toArray()[0]?.sql ?? "";
-    if (!schema.includes("'snooker'")) {
+    if (!schema.includes("'team_battle'")) {
       this.ctx.storage.transactionSync(() => {
         this.ctx.storage.sql.exec(`
-          CREATE TABLE room_game_state_v2 (
+          CREATE TABLE room_game_state_v3 (
             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            mode TEXT NOT NULL CHECK (mode IN ('score', 'score_cards', 'eight_ball', 'snooker')),
+            mode TEXT NOT NULL CHECK (mode IN ('score', 'score_cards', 'eight_ball', 'snooker', 'team_battle')),
             state_json TEXT NOT NULL CHECK (json_valid(state_json)),
             updated_at INTEGER NOT NULL
           );
-          INSERT INTO room_game_state_v2 (singleton, mode, state_json, updated_at)
+          INSERT INTO room_game_state_v3 (singleton, mode, state_json, updated_at)
             SELECT singleton, mode, state_json, updated_at FROM room_game_state;
           DROP TABLE room_game_state;
-          ALTER TABLE room_game_state_v2 RENAME TO room_game_state;
+          ALTER TABLE room_game_state_v3 RENAME TO room_game_state;
         `);
       });
     }
     this.ctx.storage.sql.exec(
-      "INSERT INTO room_schema_versions (name, version) VALUES ('room_game_state', 2) ON CONFLICT(name) DO UPDATE SET version = excluded.version",
+      "INSERT INTO room_schema_versions (name, version) VALUES ('room_game_state', 3) ON CONFLICT(name) DO UPDATE SET version = excluded.version",
     );
   }
 
@@ -163,6 +170,7 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
     chaseScore?: ChaseScoreState;
     eightBall?: RealtimeEightBallState;
     snooker?: RealtimeSnookerState;
+    teamBattle?: RealtimeTeamBattleState;
   }): Promise<RoomSnapshot> {
     const existing = this.meta();
     if (existing) {
@@ -172,6 +180,7 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
       if (!this.chaseScoreState() && input.chaseScore) this.persistChaseScoreState(input.chaseScore);
       if (!this.eightBallState() && input.eightBall) this.persistEightBallState(input.eightBall);
       if (!this.snookerState() && input.snooker) this.persistSnookerState(input.snooker);
+      if (!this.teamBattleState() && input.teamBattle) this.persistTeamBattleState(input.teamBattle);
       return this.snapshot();
     }
 
@@ -190,6 +199,7 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
       if (input.chaseScore) this.persistChaseScoreState(input.chaseScore);
       if (input.eightBall) this.persistEightBallState(input.eightBall);
       if (input.snooker) this.persistSnookerState(input.snooker);
+      if (input.teamBattle) this.persistTeamBattleState(input.teamBattle);
     });
     return this.snapshot();
   }
@@ -398,9 +408,9 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
   }
 
   /**
-   * P1：把注册成员绑定到局内席位，席位显示名改为该成员加入时的注册昵称快照
-   * （displayName，中途改昵称不影响本局）。席位 ID 与计分流水保持不变，座位号
-   * 仍只用于布局。仅房主可执行；目标成员必须为 host / player（观战者不可绑定）。
+   * P1：把注册成员绑定到局内席位，所有玩法的席位显示名都改为该成员加入时的
+   * 注册昵称快照（displayName，中途改昵称不影响本局）。席位 ID 与计分流水保持
+   * 不变，座位号仍只用于布局。仅房主可执行；目标成员必须为 host / player。
    */
   async claimSeat(input: {
     operationId: string;
@@ -425,6 +435,32 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
     const target = this.member(input.targetUserId);
     if (!target || target.role === "spectator") return { ok: false, code: "not_found", currentVersion: meta.version };
     const displayName = target.nickname.trim().slice(0, 80) || `玩家${target.userId.slice(-4)}`;
+
+    const teamBattle = this.teamBattleState();
+    if (teamBattle) {
+      const seat = teamBattle.seats.find((item) => item.playerId === input.playerId);
+      const player = teamBattle.match.players.find((item) => item.id === input.playerId);
+      if (!seat || !player) return { ok: false, code: "not_found", currentVersion: meta.version };
+      if (seat.userId || teamBattle.seats.some((item) => item.userId === target.userId)) {
+        return { ok: false, code: "invalid_command", currentVersion: meta.version };
+      }
+      const seats = teamBattle.seats.map((item) => item.playerId === seat.playerId
+        ? { ...item, userId: target.userId }
+        : item);
+      const players = teamBattle.match.players.map((item) => item.id === player.id
+        ? { ...item, name: displayName }
+        : item);
+      const result = this.ctx.storage.transactionSync(() => {
+        this.persistTeamBattleState({ ...teamBattle, match: { ...teamBattle.match, players }, seats });
+        return this.appendEvent(meta.version, input.operationId, input.actorUserId, "player.claimed", {
+          playerId: seat.playerId,
+          userId: target.userId,
+          nickname: displayName,
+        });
+      });
+      if (result.ok) this.broadcast({ type: "event", event: result.event, version: result.version });
+      return result;
+    }
 
     const chaseScore = this.chaseScoreState();
     if (chaseScore) {
@@ -516,6 +552,28 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
     if (!actor || actor.role !== "host") return { ok: false, code: "forbidden", currentVersion: meta.version };
     const nickname = input.nickname.trim().slice(0, 80);
     if (!nickname) return { ok: false, code: "invalid_command", currentVersion: meta.version };
+
+    const teamBattle = this.teamBattleState();
+    if (teamBattle) {
+      const seat = teamBattle.seats.find((item) => item.playerId === input.playerId);
+      const player = teamBattle.match.players.find((item) => item.id === input.playerId);
+      if (!seat || !player) return { ok: false, code: "not_found", currentVersion: meta.version };
+      if (seat.userId) return { ok: false, code: "forbidden", currentVersion: meta.version };
+      let match: RealtimeTeamBattleState["match"];
+      try { match = renameTeamBattlePlayer(teamBattle.match, player.id, nickname, Date.now()); }
+      catch { return { ok: false, code: "invalid_command", currentVersion: meta.version }; }
+      if (match === teamBattle.match) return { ok: false, code: "invalid_command", currentVersion: meta.version };
+      const result = this.ctx.storage.transactionSync(() => {
+        this.persistTeamBattleState({ ...teamBattle, match });
+        return this.appendEvent(meta.version, input.operationId, input.actorUserId, "player.renamed", {
+          playerId: player.id,
+          nickname,
+          previousNickname: player.name,
+        });
+      });
+      if (result.ok) this.broadcast({ type: "event", event: result.event, version: result.version });
+      return result;
+    }
 
     const chaseScore = this.chaseScoreState();
     if (chaseScore) {
@@ -672,6 +730,10 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
     const chaseScore = this.chaseScoreState();
     const eightBall = this.eightBallState();
     const snooker = this.snookerState();
+    const teamBattle = this.teamBattleState();
+    if (teamBattle && member.role !== "host") {
+      return { ok: false, code: "forbidden", currentVersion: meta.version };
+    }
     if (input.kind.startsWith("card.")) {
       const state = chaseScore ?? eightBall ?? snooker;
       const cards = state?.cards;
@@ -699,7 +761,9 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
         return { ok: false, code: "forbidden", currentVersion: meta.version };
       }
     }
-    const projection = snooker
+    const projection = teamBattle
+      ? projectTeamBattleCommand(teamBattle, { kind: input.kind, payload: input.payload, now: Date.now() })
+      : snooker
       ? projectRealtimeSnookerCommand(snooker, { kind: input.kind, payload: input.payload, now: Date.now() })
       : chaseScore
       ? projectChaseCommand(chaseScore, this.scoringEvents(), {
@@ -719,7 +783,8 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
       return { ok: false, code: projection, currentVersion: meta.version };
     }
     return this.ctx.storage.transactionSync(() => {
-      if (projection.state.mode === "snooker") this.persistSnookerState(projection.state);
+      if (projection.state.mode === "team_battle") this.persistTeamBattleState(projection.state);
+      else if (projection.state.mode === "snooker") this.persistSnookerState(projection.state);
       else if (projection.state.mode === "chinese_eight") this.persistEightBallState(projection.state);
       else this.persistChaseScoreState(projection.state);
       return this.appendEvent(meta.version, input.operationId, input.actorUserId, projection.kind, projection.payload);
@@ -962,6 +1027,7 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
       chaseScore: this.projectChaseScore(this.chaseScoreState(), observer) ?? null,
       eightBall: this.projectEightBall(this.eightBallState(), observer) ?? null,
       snooker: this.projectSnooker(this.snookerState(), observer) ?? null,
+      teamBattle: this.teamBattleState() ?? null,
     };
   }
 
@@ -1072,6 +1138,17 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
       members: snapshot.members,
       events: snapshot.events,
     };
+    if (snapshot.teamBattle) {
+      const finished = snapshot.teamBattle.match.status === "completed"
+        ? snapshot.teamBattle.match
+        : finishTeamBattleMatch(snapshot.teamBattle.match, endedAt);
+      const archived = {
+        ...finished,
+        realtimeArchive: { ...realtimeArchive, seats: snapshot.teamBattle.seats },
+      };
+      if (!isTeamBattleMatch(archived)) throw new Error("Realtime team-battle archive is invalid");
+      return archived;
+    }
     if (snapshot.chaseScore) {
       const score = snapshot.chaseScore;
       const baselinePlayers = Array.isArray(baseline.players) ? baseline.players : [];
@@ -1280,6 +1357,22 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
   private persistSnookerState(state: RealtimeSnookerState): void {
     this.ctx.storage.sql.exec(
       `INSERT INTO room_game_state (singleton, mode, state_json, updated_at) VALUES (1, 'snooker', ?, ?)
+       ON CONFLICT(singleton) DO UPDATE SET mode = excluded.mode, state_json = excluded.state_json, updated_at = excluded.updated_at`,
+      JSON.stringify(state),
+      Date.now(),
+    );
+  }
+
+  private teamBattleState(): RealtimeTeamBattleState | undefined {
+    const row = this.ctx.storage.sql.exec<{ state_json: string }>(
+      "SELECT state_json FROM room_game_state WHERE singleton = 1 AND mode = 'team_battle'",
+    ).toArray()[0];
+    return row ? JSON.parse(row.state_json) as RealtimeTeamBattleState : undefined;
+  }
+
+  private persistTeamBattleState(state: RealtimeTeamBattleState): void {
+    this.ctx.storage.sql.exec(
+      `INSERT INTO room_game_state (singleton, mode, state_json, updated_at) VALUES (1, 'team_battle', ?, ?)
        ON CONFLICT(singleton) DO UPDATE SET mode = excluded.mode, state_json = excluded.state_json, updated_at = excluded.updated_at`,
       JSON.stringify(state),
       Date.now(),

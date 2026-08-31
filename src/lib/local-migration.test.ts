@@ -73,7 +73,7 @@ describe("local migration preparation", () => {
     expect(JSON.parse(migration.resources.find(({ kind }) => kind === "match")!.snapshotJson)).toEqual(snooker);
   });
 
-  it("backs up team battles without creating cloud migration resources", async () => {
+  it("includes team battles in cloud migration resources and the raw backup", async () => {
     let teamBattle = createTeamBattleMatch({ playerNames: ["团战甲", "团战乙"] }, 600);
     teamBattle = recordTeamBattleRound(teamBattle, {
       playerIds: [teamBattle.players[0].id, teamBattle.players[1].id],
@@ -89,8 +89,10 @@ describe("local migration preparation", () => {
     const migration = await prepareLocalMigration(store, 1_000);
 
     expect(migration.backup.entries).toContainEqual({ key: APP_STORAGE_KEY, value: JSON.stringify(archive) });
-    expect(migration.resources.some(({ localId }) => localId === teamBattle.id)).toBe(false);
-    expect(migration.preview.matches).toBe(0);
+    const matchResource = migration.resources.find(({ localId }) => localId === teamBattle.id);
+    expect(matchResource).toMatchObject({ kind: "match" });
+    expect(JSON.parse(matchResource!.snapshotJson)).toEqual(teamBattle);
+    expect(migration.preview).toMatchObject({ players: 2, matches: 1, eightBallRounds: 0 });
   });
 });
 

@@ -8,6 +8,7 @@ import {
   type TeamBattleReportOptions,
   type TeamBattleReportProjection,
 } from "./team-battle";
+import { REPORT_THEME_PALETTES, type ReportTheme } from "./report-theme";
 
 const REPORT_WIDTH = 900;
 const BASE_HEIGHT = 430;
@@ -62,19 +63,20 @@ function elapsedLabel(match: TeamBattleMatch) {
   return `${Math.floor(seconds / 3600)} 小时 ${Math.floor(seconds % 3600 / 60)} 分`;
 }
 
-export function buildTeamBattleReport(match: TeamBattleMatch, options: TeamBattleReportOptions) {
+export function buildTeamBattleReport(match: TeamBattleMatch, options: TeamBattleReportOptions, theme: ReportTheme = "night") {
+  const palette = REPORT_THEME_PALETTES[theme];
   const report = buildTeamBattleReportProjection(match, options);
   const rows: string[] = [];
   let y = 235;
   const text = (x: number, rowY: number, value: string, className = "row", anchor = "start") => `<text x="${x}" y="${rowY}" text-anchor="${anchor}" class="${className}">${escapeSvg(value)}</text>`;
   const section = (title: string) => { y += 42; rows.push(text(50, y, title, "section")); y += 20; };
   const row = (left: string, middle: string, right = "") => {
-    rows.push(`<rect x="50" y="${y}" width="800" height="46" rx="10" fill="${Math.floor(y / ROW_HEIGHT) % 2 ? "#0d1b16" : "#10211a"}"/>`, text(70, y + 29, left, "strong"), text(365, y + 29, middle), text(830, y + 29, right, "score", "end"));
+    rows.push(`<rect x="50" y="${y}" width="800" height="46" rx="10" fill="${Math.floor(y / ROW_HEIGHT) % 2 ? palette.surfaceAlt : palette.surface}"/>`, text(70, y + 29, left, "strong"), text(365, y + 29, middle), text(830, y + 29, right, "score", "end"));
     y += ROW_HEIGHT;
   };
   const title = report.player ? `${report.player.player.name} · 团战专项报告` : match.title || "团战战绩";
   const subtitle = `${match.players.length} 名成员 · ${report.match.rounds.length} 局 · ${report.match.pairs.length} 组实际交手 · ${elapsedLabel(match)}`;
-  rows.push(`<rect width="${REPORT_WIDTH}" height="100%" fill="#07110d"/><circle cx="830" cy="20" r="180" fill="#123325"/><text x="50" y="62" class="date">${escapeSvg(dateLabel(match.startedAt))}</text><text x="50" y="126" class="title">${escapeSvg(title)}</text><text x="50" y="166" class="meta">${escapeSvg(subtitle)}</text><text x="50" y="196" class="meta">${escapeSvg(match.location || "本机团战")}</text><line x1="50" y1="218" x2="850" y2="218" stroke="#315445"/>`);
+  rows.push(`<rect width="${REPORT_WIDTH}" height="100%" fill="${palette.background}"/><circle cx="830" cy="20" r="180" fill="${palette.decoration}"/><text x="50" y="62" class="date">${escapeSvg(dateLabel(match.startedAt))}</text><text x="50" y="126" class="title">${escapeSvg(title)}</text><text x="50" y="166" class="meta">${escapeSvg(subtitle)}</text><text x="50" y="196" class="meta">${escapeSvg(match.location || "本机团战")}</text><line x1="50" y1="218" x2="850" y2="218" stroke="${palette.border}"/>`);
 
   if (report.player) {
     section("成员汇总");
@@ -95,22 +97,23 @@ export function buildTeamBattleReport(match: TeamBattleMatch, options: TeamBattl
   } else {
     section("逐局变化");
     const rounds = report.player?.rounds ?? report.match.rounds;
-    if (rounds.length) rounds.forEach((round, index) => roundRow(rows, round, match, index, y += index ? 0 : 0));
+    if (rounds.length) rounds.forEach((round, index) => roundRow(rows, round, match, index, y += index ? 0 : 0, theme));
     if (rounds.length) y += rounds.length * ROUND_ROW_HEIGHT;
     else row("本场尚无逐局记录", "", "0 局");
   }
 
   y += 55;
   const height = Math.max(1_200, y);
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${REPORT_WIDTH}" height="${height}" viewBox="0 0 ${REPORT_WIDTH} ${height}" role="img" aria-label="团战比赛报告"><style>.title{font:800 42px system-ui,'Noto Sans SC';fill:#f3faf6}.date{font:800 25px system-ui,'Noto Sans SC';fill:#76e6ad}.meta{font:16px system-ui,'Noto Sans SC';fill:#9cb3a8}.section{font:800 22px system-ui,'Noto Sans SC';fill:#eff8f2}.row{font:15px system-ui,'Noto Sans SC';fill:#dce9e1}.strong{font:700 15px system-ui,'Noto Sans SC';fill:#eff8f2}.score{font:800 18px system-ui,'Noto Sans SC';fill:#76e6ad}</style>${rows.join("")}<text x="450" y="${height - 22}" text-anchor="middle" class="meta">台球奇招 · TEAM BATTLE REPORT</text></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${REPORT_WIDTH}" height="${height}" viewBox="0 0 ${REPORT_WIDTH} ${height}" role="img" aria-label="团战比赛报告"><style>.title{font:800 42px system-ui,'Noto Sans SC';fill:${palette.strong}}.date{font:800 25px system-ui,'Noto Sans SC';fill:${palette.accent}}.meta{font:16px system-ui,'Noto Sans SC';fill:${palette.muted}}.section{font:800 22px system-ui,'Noto Sans SC';fill:${palette.strong}}.row{font:15px system-ui,'Noto Sans SC';fill:${palette.text}}.strong{font:700 15px system-ui,'Noto Sans SC';fill:${palette.strong}}.score{font:800 18px system-ui,'Noto Sans SC';fill:${palette.accent}}</style>${rows.join("")}<text x="450" y="${height - 22}" text-anchor="middle" class="meta">台球奇招 · TEAM BATTLE REPORT</text></svg>`;
 }
 
-function roundRow(rows: string[], round: EffectiveTeamBattleRound, match: TeamBattleMatch, index: number, startY: number) {
+function roundRow(rows: string[], round: EffectiveTeamBattleRound, match: TeamBattleMatch, index: number, startY: number, theme: ReportTheme) {
+  const palette = REPORT_THEME_PALETTES[theme];
   const y = startY + index * ROUND_ROW_HEIGHT;
   const player = (id: string) => match.players.find((item) => item.id === id)!;
   const first = player(round.playerIds[0]);
   const second = player(round.playerIds[1]);
   const winner = player(round.winnerId);
   const note = round.note ? ` · ${round.note.slice(0, 18)}` : "";
-  rows.push(`<rect x="50" y="${y}" width="800" height="52" rx="10" fill="${index % 2 ? "#0d1b16" : "#10211a"}"/><text x="70" y="${y + 23}" class="strong">第 ${round.sequenceNo} 局 · ${escapeSvg(first.name)} vs ${escapeSvg(second.name)}</text><text x="70" y="${y + 43}" class="meta">${clockLabel(round.confirmedAt)} · ${escapeSvg(winner.name)} ${WIN_LABELS[round.winType]}${escapeSvg(note)}</text><text x="830" y="${y + 32}" text-anchor="end" class="score">${round.after[first.id] ?? 0} : ${round.after[second.id] ?? 0}</text>`);
+  rows.push(`<rect x="50" y="${y}" width="800" height="52" rx="10" fill="${index % 2 ? palette.surfaceAlt : palette.surface}"/><text x="70" y="${y + 23}" class="strong">第 ${round.sequenceNo} 局 · ${escapeSvg(first.name)} vs ${escapeSvg(second.name)}</text><text x="70" y="${y + 43}" class="meta">${clockLabel(round.confirmedAt)} · ${escapeSvg(winner.name)} ${WIN_LABELS[round.winType]}${escapeSvg(note)}</text><text x="830" y="${y + 32}" text-anchor="end" class="score">${round.after[first.id] ?? 0} : ${round.after[second.id] ?? 0}</text>`);
 }

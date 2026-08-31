@@ -504,7 +504,9 @@ function snapshotMatchFallbacks(snapshot: SnapshotRecord, players: AdminMatchPla
     actorUserId: null,
     actorUsername: null,
     action: snapshotString(event.type, "snapshot_event"),
-    reason: null,
+    reason: event.type === "correction" && typeof event.correctsEventId === "string"
+      ? `更正 ${event.correctsEventId}`
+      : null,
     beforeVersion: Math.max(0, snapshotNumber(event.matchVersion, index + 1) - 1),
     afterVersion: snapshotNumber(event.matchVersion, index + 1),
     metadata: event,

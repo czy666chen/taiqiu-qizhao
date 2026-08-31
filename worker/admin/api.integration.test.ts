@@ -717,7 +717,7 @@ describe("administrator authentication HTTP API", () => {
       auditEvents: [
         expect.objectContaining({ action: "round" }),
         expect.objectContaining({ action: "round" }),
-        expect.objectContaining({ action: "correction" }),
+        expect.objectContaining({ action: "correction", reason: "更正 round-2" }),
         expect.objectContaining({ action: "finish" }),
       ],
     });

@@ -1,4 +1,16 @@
-import { expect, Page, test } from "@playwright/test";
+import { Download, expect, Page, test } from "@playwright/test";
+import { readFile } from "node:fs/promises";
+
+async function expectCompletedDownload(downloadPromise: Promise<Download>, filename: string | RegExp) {
+  const download = await downloadPromise;
+  if (typeof filename === "string") {
+    expect(download.suggestedFilename()).toBe(filename);
+  } else {
+    expect(download.suggestedFilename()).toMatch(filename);
+  }
+  await download.path();
+  return download;
+}
 
 async function createScoreMatch(page: Page, playerCount = 2) {
   await page.goto("/");
@@ -109,7 +121,7 @@ test("斯诺克本机计分可形成 31+ 单杆、判罚并刷新恢复", async 
   await page.getByRole("button", { name: "确认结束并保存" }).click();
   const imageDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "保存竖版长图" }).click();
-  await expect((await imageDownload).suggestedFilename()).toMatch(/^斯诺克战绩-.*\.png$/);
+  await expectCompletedDownload(imageDownload, /^斯诺克战绩-.*\.png$/);
 });
 
 test("玩法五卡布局与标准斯诺克设置在视口内稳定显示", async ({ page }) => {
@@ -209,7 +221,7 @@ test("团战多组合比分隔离并在刷新后恢复", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "逐局流水" })).toBeVisible();
   await expect(page.getByRole("button", { name: "下载 PNG 长图" })).toBeVisible();
   await expect(page.getByRole("button", { name: "下载 PDF" })).toBeVisible();
-  expect((await page.getByRole("button", { name: "返回战绩" }).boundingBox())?.width ?? 999).toBeLessThan(160);
+  expect((await page.getByRole("link", { name: "返回战绩" }).boundingBox())?.width ?? 999).toBeLessThan(160);
   const reportControlHeights = await page.locator(".team-report-actions select, .team-report-actions > .export-actions:not(.minor) button").evaluateAll((controls) => controls.map((control) => control.getBoundingClientRect().height));
   expect(reportControlHeights.every((height) => height === 44)).toBe(true);
   await page.getByRole("button", { name: "切换到白天版本" }).click();
@@ -217,18 +229,97 @@ test("团战多组合比分隔离并在刷新后恢复", async ({ page }) => {
   await expect(page.locator(".team-report-preview")).toHaveCSS("background-color", "rgb(238, 248, 242)");
   const pngDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "下载 PNG 长图" }).click();
-  await expect((await pngDownload).suggestedFilename()).toMatch(/团战战绩-\d{8}\.png$/);
+  await expectCompletedDownload(pngDownload, /团战战绩-\d{8}\.png$/);
   const pdfDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "下载 PDF" }).click();
-  await expect((await pdfDownload).suggestedFilename()).toMatch(/团战战绩-\d{8}\.pdf$/);
+  await expectCompletedDownload(pdfDownload, /团战战绩-\d{8}\.pdf$/);
   await page.getByLabel("报告范围").selectOption({ label: "成员 1" });
   await expect(page.getByText(/成员 1 专项/)).toBeVisible();
   const memberPdfDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "下载 PDF" }).click();
-  await expect((await memberPdfDownload).suggestedFilename()).toMatch(/团战战绩-成员 1-\d{8}\.pdf$/);
+  await expectCompletedDownload(memberPdfDownload, /团战战绩-成员 1-\d{8}\.pdf$/);
   await page.getByRole("button", { name: "删除战绩" }).click();
   await page.getByRole("button", { name: "确认删除" }).click();
   await expect(page.getByRole("heading", { name: "还没有战绩" })).toBeVisible();
+});
+
+test("云端实时团战战绩可恢复并导出一致的 PNG、PDF 和 JSON", async ({ page }) => {
+  const startedAt = 1_788_000_000_000;
+  const players = [
+    { id: "cloud-a", name: "阿杰", joinedAt: startedAt },
+    { id: "cloud-b", name: "老王", joinedAt: startedAt + 1 },
+  ];
+  const playerNames = { "cloud-a": "阿杰", "cloud-b": "老王" };
+  const match = {
+    schemaVersion: 1,
+    id: "cloud-team-archived",
+    mode: "team_battle",
+    status: "completed",
+    title: "云端周末团战",
+    location: "八号桌",
+    note: "",
+    createdAt: startedAt,
+    startedAt,
+    endedAt: startedAt + 20,
+    pausedDurationMs: 0,
+    players,
+    events: [
+      {
+        id: "cloud-round-1",
+        sequenceNo: 1,
+        type: "round",
+        occurredAt: startedAt + 10,
+        playerNames,
+        round: {
+          playerIds: ["cloud-a", "cloud-b"],
+          winnerId: "cloud-a",
+          winType: "break_clear",
+          fouls: { "cloud-a": 0, "cloud-b": 1 },
+          note: "决胜局",
+          startedAt,
+          confirmedAt: startedAt + 10,
+        },
+      },
+      { id: "cloud-finish", sequenceNo: 2, type: "finish", occurredAt: startedAt + 20, playerNames },
+    ],
+  };
+  await page.route("**/api/auth/me", (route) => route.fulfill({
+    json: { user: { id: "cloud-user", username: "cloud_user", publicCode: "CLOUD001", nickname: "云端用户", avatarUrl: null } },
+  }));
+  await page.route("**/api/devices", (route) => route.fulfill({ json: { device: { id: "device-1" } } }));
+  await page.route("**/api/history", (route) => route.fulfill({ json: { matches: [{
+    id: match.id, mode: match.mode, status: match.status, privacy: "participants", version: 7,
+    created_at: startedAt, started_by_user_id: "cloud-user", owner_user_id: "cloud-user",
+  }] } }));
+  await page.route(`**/api/matches/${match.id}`, (route) => route.fulfill({
+    json: { match: { snapshot_json: JSON.stringify(match), version: 7 } },
+  }));
+
+  await page.goto("/profile");
+  await expect(page.getByRole("heading", { name: "云端对局" })).toBeVisible();
+  await expect(page.getByText("团战实时 · 已结束")).toBeVisible();
+  await page.getByRole("button", { name: "只读恢复" }).click();
+  await expect(page).toHaveURL(/\/history\/cloud-team-archived$/);
+  await expect(page.getByRole("heading", { name: "云端周末团战" })).toBeVisible();
+  await expect(page.locator(".team-pair-results article").first()).toContainText("1 : 0");
+  await expect(page.locator(".eight-ledger.history article").first()).toContainText("阿杰 · 炸清 · 犯规 阿杰 0 / 老王 1 · 决胜局");
+
+  const pngDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载 PNG 长图" }).click();
+  await expectCompletedDownload(pngDownload, /团战战绩-\d{8}\.png$/);
+  const pdfDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下载 PDF" }).click();
+  await expectCompletedDownload(pdfDownload, /团战战绩-\d{8}\.pdf$/);
+  const jsonDownloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", { name: "JSON 备份" }).click();
+  const jsonDownload = await jsonDownloadPromise;
+  const jsonPath = await jsonDownload.path();
+  const exported = JSON.parse(await readFile(jsonPath!, "utf8")) as {
+    match: typeof match;
+    projection: { rounds: Array<{ winnerId: string; after: Record<string, number> }> };
+  };
+  expect(exported.match.id).toBe(match.id);
+  expect(exported.projection.rounds[0]).toMatchObject({ winnerId: "cloud-a", after: { "cloud-a": 1, "cloud-b": 0 } });
 });
 
 test("手机竖屏首页隐藏计分台预览且导航状态徽标不重叠", async ({ page }) => {
@@ -261,17 +352,17 @@ test("超长团战报告自动降级后仍可导出整场和八人成员报告",
 
   const pngDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "下载 PNG 长图" }).click();
-  await expect((await pngDownload).suggestedFilename()).toMatch(/团战战绩-\d{8}\.png$/);
+  await expectCompletedDownload(pngDownload, /团战战绩-\d{8}\.png$/);
   const pdfDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "下载 PDF" }).click();
-  await expect((await pdfDownload).suggestedFilename()).toMatch(/团战战绩-\d{8}\.pdf$/);
+  await expectCompletedDownload(pdfDownload, /团战战绩-\d{8}\.pdf$/);
 
   await page.getByLabel("报告范围").selectOption({ label: "成员 1" });
   await expect(page.getByText("报告预览：成员 1 专项")).toBeVisible();
   await expect(page.getByText("内容较长，已省略逐局变化，仅展示两两最终比分")).toBeVisible();
   const memberPdfDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "下载 PDF" }).click();
-  await expect((await memberPdfDownload).suggestedFilename()).toMatch(/团战战绩-成员 1-\d{8}\.pdf$/);
+  await expectCompletedDownload(memberPdfDownload, /团战战绩-成员 1-\d{8}\.pdf$/);
 });
 
 test.describe("追分核心流程", () => {
@@ -296,10 +387,10 @@ test.describe("追分核心流程", () => {
     await expect(page.getByRole("heading", { name: "追分结算" })).toBeVisible();
     const imageDownload = page.waitForEvent("download");
     await page.getByRole("button", { name: "保存竖版长图" }).click();
-    await expect((await imageDownload).suggestedFilename()).toMatch(/^追分战绩-.*\.png$/);
+    await expectCompletedDownload(imageDownload, /^追分战绩-.*\.png$/);
     const pdfDownload = page.waitForEvent("download");
     await page.getByRole("button", { name: "下载 PDF" }).click();
-    await expect((await pdfDownload).suggestedFilename()).toMatch(/^追分战绩-.*\.pdf$/);
+    await expectCompletedDownload(pdfDownload, /^追分战绩-.*\.pdf$/);
   });
 });
 
@@ -345,6 +436,8 @@ test("战绩 JSON 可校验并下载长图和 PDF", async ({ page }) => {
 
   const dataControlTrigger = page.getByRole("button", { name: "导出与删除" });
   await expect(dataControlTrigger).toBeVisible();
+  await page.getByRole("button", { name: "切换到白天版本" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "day");
   await expect(page.getByRole("dialog", { name: "导出与删除" })).toHaveCount(0);
   await dataControlTrigger.click();
   await expect(page.getByRole("dialog", { name: "导出与删除" })).toBeVisible();
@@ -369,11 +462,26 @@ test("战绩 JSON 可校验并下载长图和 PDF", async ({ page }) => {
   await expect(page.getByLabel("分类统计")).toBeChecked();
   const pngDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "下载长图 PNG" }).click();
-  await expect((await pngDownload).suggestedFilename()).toBe("战绩报告-长图.png");
+  const png = await expectCompletedDownload(pngDownload, "战绩报告-长图.png");
+  const pngPath = await png.path();
+  const pngDataUrl = `data:image/png;base64,${(await readFile(pngPath!)).toString("base64")}`;
+  const topLeftPixel = await page.evaluate(async (source) => {
+    const image = new Image();
+    image.src = source;
+    await image.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext("2d")!;
+    context.drawImage(image, 0, 0, 1, 1, 0, 0, 1, 1);
+    return Array.from(context.getImageData(0, 0, 1, 1).data);
+  }, pngDataUrl);
+  expect(topLeftPixel).toEqual([255, 254, 250, 255]);
 
   const pdfDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "下载 PDF" }).click();
-  await expect((await pdfDownload).suggestedFilename()).toBe("战绩报告.pdf");
+  const pdf = await expectCompletedDownload(pdfDownload, "战绩报告.pdf");
+  expect((await readFile((await pdf.path())!)).subarray(0, 8).toString()).toBe("%PDF-1.4");
   expect(mutationRequests).toEqual([]);
 
   await page.keyboard.press("Escape");
@@ -444,10 +552,10 @@ test("R2.5 中八建局、逐局录入、布局切换、恢复与战绩导出", 
   await expect(page.getByRole("button", { name: "JSON 备份" })).toBeVisible();
   const imageDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "保存竖版长图" }).click();
-  await expect((await imageDownload).suggestedFilename()).toMatch(/^中八战绩-.*\.png$/);
+  await expectCompletedDownload(imageDownload, /^中八战绩-.*\.png$/);
   const pdfDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "下载 PDF" }).click();
-  await expect((await pdfDownload).suggestedFilename()).toMatch(/^中八战绩-.*\.pdf$/);
+  await expectCompletedDownload(pdfDownload, /^中八战绩-.*\.pdf$/);
 });
 
 test("奇招牌抽取、使用、安全跳过和刷新恢复", async ({ page }) => {

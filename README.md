@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/czy666chen/taiqiu-qizhao)](https://github.com/czy666chen/taiqiu-qizhao/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-面向台球朋友局的开源 Web 应用，支持标准 15 红斯诺克、中八双人赛、2–8 人追分、奇招牌和基于 Cloudflare Durable Objects/WebSocket 的多人实时房间。当前版本为 `v6.1.0`。
+面向台球朋友局的开源 Web 应用，支持标准 15 红斯诺克、中八双人赛、2–8 人追分、奇招牌和基于 Cloudflare Durable Objects/WebSocket 的多人实时房间。
 
 ## 功能
 

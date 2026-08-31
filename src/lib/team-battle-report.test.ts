@@ -34,4 +34,13 @@ describe("团战阶段 4 报告", () => {
     expect(svg).toContain("1 : 0");
     expect(svg).toContain("已省略逐局变化");
   });
+
+  it("白天模式生成白色系 SVG，黑夜模式保留深色底", () => {
+    const options = { scope: { kind: "all" } as const, detail: "summary" as const };
+    expect(buildTeamBattleReport(twoPlayerSample, options, "night")).toContain('fill="#07110d"');
+    const day = buildTeamBattleReport(twoPlayerSample, options, "day");
+    expect(day).toContain('fill="#fffefa"');
+    expect(day).toContain("fill:#102019");
+    expect(day).not.toContain('fill="#07110d"');
+  });
 });

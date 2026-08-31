@@ -1,11 +1,13 @@
 "use client";
 
 import { type AnchorHTMLAttributes, type MouseEvent, useEffect, useRef, useState } from "react";
+import { version as APP_VERSION } from "../package.json";
 import AdminApp from "./AdminApp";
 import { CARD_DEFINITIONS, CardCategory } from "../src/data/cards";
 import { getOfficialDeck, officialDeckCardCount, OfficialDeckId } from "../src/lib/official-decks";
 import type { DeckSnapshot } from "../src/lib/custom-decks";
 import { buildSnookerReport, parseMatchReport, renderReportPdf, renderReportPng } from "../src/lib/json-report";
+import { currentReportTheme, REPORT_THEME_PALETTES, type ReportTheme } from "../src/lib/report-theme";
 import {
   addMatchPlayer,
   applyBlackGoldScore,
@@ -100,14 +102,14 @@ import { createSnookerMatch, getSnookerBreakStats, getSnookerScoreSituation, isS
 import { SnookerBoard, SnookerHistoryDetail, SnookerSetupDialog, snookerElapsedMs } from "./SnookerFeature";
 import { useModalDialog } from "./useModalDialog";
 import { completeLocalTeamBattle, hasActiveLocalMatch, startLocalTeamBattle, updateLocalTeamBattle } from "../src/lib/team-battle-app";
-import { getTeamBattleProjection, teamBattleElapsedMs, type TeamBattleDraft, type TeamBattleMatch } from "../src/lib/team-battle";
-import { TeamBattleBoard, TeamBattleHistoryDetail, TeamBattleSetupDialog } from "./TeamBattleFeature";
+import { getTeamBattleProjection, isTeamBattleMatch, teamBattleElapsedMs, type TeamBattleDraft, type TeamBattleMatch } from "../src/lib/team-battle";
+import { RealtimeTeamBattlePanel, TeamBattleBoard, TeamBattleHistoryDetail, TeamBattleSetupDialog, type RealtimeTeamBattleState } from "./TeamBattleFeature";
 import { HeadToHeadScoreboard, type HeadToHeadScoreboardSide } from "./HeadToHeadScoreboard";
 
-const APP_VERSION = "5.3.1";
-
+const CLIENT_RECONNECT_CLOSE_CODE = 4001;
 const DEFAULT_SCORE_PRESET_ID = "builtin-14710";
 const APP_THEME_KEY = "taiqiu-qizhao-theme";
+const APP_THEME_COLORS = { day: "#f3f0e7", night: "#07110d" } as const;
 
 const NAV_ITEMS = [
   { path: "/", label: "对局", icon: "◎" },
@@ -279,7 +281,7 @@ function EmptyHome({ onStart, onStartEight, onStartSnooker, onStartTeamBattle, o
           </div>
           {cloudRooms.map((room) => (
             <button key={room.matchId} onClick={() => onEnterCloudRoom(room.roomCode)}>
-              <b>{room.myRole === "host" ? "房主" : "玩家"} · {room.mode === "chinese_eight" ? "中八实时" : room.mode === "score_cards" ? "追分·奇招" : "多人追分"}</b>
+              <b>{room.myRole === "host" ? "房主" : "玩家"} · {cloudMatchModeLabel(room.mode)}</b>
               <small>房间码 {room.roomCode} · {room.roomStatus === "active" ? "进行中" : "已创建"} · 云端实时</small>
               <span>进入 →</span>
             </button>
@@ -978,20 +980,19 @@ async function downloadReportPng(filename: string, svg: string) {
   downloadBlob(filename, await renderReportPng(svg));
 }
 
-async function downloadReportPdf(filename: string, svg: string) {
-  downloadBlob(filename, await renderReportPdf(svg));
+async function downloadReportPdf(filename: string, svg: string, theme: ReportTheme) {
+  downloadBlob(filename, await renderReportPdf(svg, theme));
 }
 
 type ReportOptions = { time: boolean; trend: boolean; stats: boolean };
 const DEFAULT_REPORT_OPTIONS: ReportOptions = { time: true, trend: true, stats: true };
-const REPORT_COLORS = ["#66e2a3", "#67c8ff", "#ffd166", "#b997ff", "#ff7b72", "#8de1e8", "#f7a8d8", "#b7db7b"];
 
 function escapeMarkup(value: string) { return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]!)); }
 function reportClock(timestamp: number) { return new Date(timestamp).toLocaleTimeString("zh-CN", { hour12: false }); }
 function reportDate(timestamp: number) { return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(timestamp); }
-function reportStyles() { return `<style>.title{font:800 42px system-ui,'Noto Sans SC';fill:#f3faf6}.date{font:800 28px system-ui,'Noto Sans SC';fill:#76e6ad}.meta{font:16px system-ui,'Noto Sans SC';fill:#9cb3a8}.section{font:800 22px system-ui,'Noto Sans SC';fill:#eff8f2}.name{font:700 18px system-ui,'Noto Sans SC';fill:#eff8f2}.score{font:800 38px system-ui;fill:#76e6ad}.small{font:14px system-ui,'Noto Sans SC';fill:#91a89d}.row{font:15px system-ui,'Noto Sans SC';fill:#dce9e1}.strong{font:700 15px system-ui,'Noto Sans SC';fill:#eff8f2}.legend{font:700 14px system-ui,'Noto Sans SC'}</style>`; }
-function reportHeader(title: string, subtitle: string, startedAt: number, options: ReportOptions) { return `<rect width="900" height="100%" fill="#07110d"/><circle cx="830" cy="20" r="180" fill="#123325"/><circle cx="860" cy="5" r="110" fill="#17432f"/>${options.time ? `<text x="50" y="58" class="date">${reportDate(startedAt)}</text><text x="52" y="86" class="meta">${new Date(startedAt).getFullYear()} · ${reportClock(startedAt)}</text>` : ""}<text x="50" y="145" class="title">${escapeMarkup(title)}</text><text x="50" y="180" class="meta">${escapeMarkup(subtitle)}</text><line x1="50" y1="208" x2="850" y2="208" stroke="#315445"/>`; }
-function reportChart(series: Array<{ name: string; values: number[] }>, y: number) { const x=62,w=776,h=180,all=series.flatMap((item)=>item.values),min=Math.min(...all,0),range=Math.max(1,Math.max(...all,1)-min); const points=(values:number[])=>values.map((value,index)=>`${x+index*w/Math.max(1,values.length-1)},${y+h-(value-min)/range*h}`).join(" "); return `<rect x="44" y="${y-38}" width="812" height="282" rx="20" fill="#10211a" stroke="#28483a"/><text x="66" y="${y-8}" class="section">比分走势</text>${[0,1,2,3].map((i)=>`<line x1="${x}" y1="${y+i*h/3}" x2="${x+w}" y2="${y+i*h/3}" stroke="#28483a" stroke-dasharray="5 7"/>`).join("")}${series.map((item,i)=>`<polyline points="${points(item.values)}" fill="none" stroke="${REPORT_COLORS[i]}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><text x="${66+(i%4)*190}" y="${y+207+Math.floor(i/4)*24}" class="legend" fill="${REPORT_COLORS[i]}">● ${escapeMarkup(item.name)}</text>`).join("")}`; }
+function reportStyles(theme: ReportTheme) { const p = REPORT_THEME_PALETTES[theme]; return `<style>.title{font:800 42px system-ui,'Noto Sans SC';fill:${p.strong}}.date{font:800 28px system-ui,'Noto Sans SC';fill:${p.accent}}.meta{font:16px system-ui,'Noto Sans SC';fill:${p.muted}}.section{font:800 22px system-ui,'Noto Sans SC';fill:${p.strong}}.name{font:700 18px system-ui,'Noto Sans SC';fill:${p.strong}}.score{font:800 38px system-ui;fill:${p.accent}}.small{font:14px system-ui,'Noto Sans SC';fill:${p.muted}}.row{font:15px system-ui,'Noto Sans SC';fill:${p.text}}.strong{font:700 15px system-ui,'Noto Sans SC';fill:${p.strong}}.legend{font:700 14px system-ui,'Noto Sans SC'}</style>`; }
+function reportHeader(title: string, subtitle: string, startedAt: number, options: ReportOptions, theme: ReportTheme) { const p = REPORT_THEME_PALETTES[theme]; return `<rect width="900" height="100%" fill="${p.background}"/><circle cx="830" cy="20" r="180" fill="${p.decoration}"/><circle cx="860" cy="5" r="110" fill="${p.decorationStrong}"/>${options.time ? `<text x="50" y="58" class="date">${reportDate(startedAt)}</text><text x="52" y="86" class="meta">${new Date(startedAt).getFullYear()} · ${reportClock(startedAt)}</text>` : ""}<text x="50" y="145" class="title">${escapeMarkup(title)}</text><text x="50" y="180" class="meta">${escapeMarkup(subtitle)}</text><line x1="50" y1="208" x2="850" y2="208" stroke="${p.border}"/>`; }
+function reportChart(series: Array<{ name: string; values: number[] }>, y: number, theme: ReportTheme) { const p=REPORT_THEME_PALETTES[theme],x=62,w=776,h=180,all=series.flatMap((item)=>item.values),min=Math.min(...all,0),range=Math.max(1,Math.max(...all,1)-min); const points=(values:number[])=>values.map((value,index)=>`${x+index*w/Math.max(1,values.length-1)},${y+h-(value-min)/range*h}`).join(" "); return `<rect x="44" y="${y-38}" width="812" height="282" rx="20" fill="${p.surface}" stroke="${p.border}"/><text x="66" y="${y-8}" class="section">比分走势</text>${[0,1,2,3].map((i)=>`<line x1="${x}" y1="${y+i*h/3}" x2="${x+w}" y2="${y+i*h/3}" stroke="${p.border}" stroke-dasharray="5 7"/>`).join("")}${series.map((item,i)=>`<polyline points="${points(item.values)}" fill="none" stroke="${p.chart[i]}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/><text x="${66+(i%4)*190}" y="${y+207+Math.floor(i/4)*24}" class="legend" fill="${p.chart[i]}">● ${escapeMarkup(item.name)}</text>`).join("")}`; }
 function ReportOptionFields({ options, onChange }: { options: ReportOptions; onChange: (options: ReportOptions) => void }) { const toggle=(key:keyof ReportOptions)=>onChange({...options,[key]:!options[key]}); return <div className="report-options" aria-label="导出内容"><label><input name="report-include-time" autoComplete="off" type="checkbox" checked={options.time} onChange={()=>toggle("time")} /> 日期与逐条时间</label><label><input name="report-include-trend" autoComplete="off" type="checkbox" checked={options.trend} onChange={()=>toggle("trend")} /> 比分走势</label><label><input name="report-include-stats" autoComplete="off" type="checkbox" checked={options.stats} onChange={()=>toggle("stats")} /> 分类统计</label></div>; }
 function ReportControls({ options, onChange, onImage, onPdf }: { options: ReportOptions; onChange: (options: ReportOptions) => void; onImage: () => void; onPdf: () => void }) { return <div className="report-controls"><ReportOptionFields options={options} onChange={onChange} /><div className="export-actions"><button onClick={onImage}>保存竖版长图</button><button onClick={onPdf}>下载 PDF</button></div></div>; }
 function exportEightBallJson(match: EightBallMatch) {
@@ -1004,15 +1005,16 @@ function eightBallServeMeta(match: EightBallMatch) {
   return `先开球：${firstServer} · 后续开球：${match.serveRule === "winner" ? "胜者开球" : "轮流开球"}`;
 }
 
-function buildEightBallReport(match: EightBallMatch, options: ReportOptions) {
+function buildEightBallReport(match: EightBallMatch, options: ReportOptions, theme: ReportTheme = "night") {
+  const palette = REPORT_THEME_PALETTES[theme];
   const stats=calculateEightBallStats(match), rounds=getEffectiveEightBallRounds(match), players=match.players;
-  let y=250; const parts=[reportHeader(match.title||"中八双人赛",`${match.location||"本地比赛"} · ${match.raceTo?`抢 ${match.raceTo} 局`:"自由局"} · ${eightBallServeMeta(match)}`,match.startedAt,options)];
-  parts.push(...players.map((player,index)=>{const x=50+index*405; return `<rect x="${x}" y="${y}" width="390" height="125" rx="18" fill="${index?"#112637":"#261a18"}" stroke="${REPORT_COLORS[index]}"/><text x="${x+24}" y="${y+38}" class="name">${escapeMarkup(player.name)}</text><text x="${x+24}" y="${y+91}" class="score">${stats[player.id].score}</text><text x="${x+93}" y="${y+89}" class="small">局</text>`;})); y+=180;
-  if(options.trend&&rounds.length){parts.push(reportChart([...players.map((player)=>({name:player.name,values:[0,...rounds.map((round)=>round.after[player.id]??0)]})),{name:"分差",values:[0,...rounds.map((round)=>(round.after[players[0].id]??0)-(round.after[players[1].id]??0))]}],y)); y+=320;}
-  if(options.stats){parts.push(`<text x="50" y="${y}" class="section">分类统计</text>`); y+=28; parts.push(...players.map((player,index)=>`<rect x="50" y="${y+index*62}" width="800" height="50" rx="12" fill="#10211a"/><text x="70" y="${y+32+index*62}" class="strong">${escapeMarkup(player.name)}</text><text x="250" y="${y+32+index*62}" class="row">普胜 ${stats[player.id].normal}</text><text x="390" y="${y+32+index*62}" class="row">炸清 ${stats[player.id].breakClear}</text><text x="530" y="${y+32+index*62}" class="row">接清 ${stats[player.id].runout}</text><text x="670" y="${y+32+index*62}" class="row">犯规 ${stats[player.id].fouls}</text>`)); y+=players.length*62+42;}
+  let y=250; const parts=[reportHeader(match.title||"中八双人赛",`${match.location||"本地比赛"} · ${match.raceTo?`抢 ${match.raceTo} 局`:"自由局"} · ${eightBallServeMeta(match)}`,match.startedAt,options,theme)];
+  parts.push(...players.map((player,index)=>{const x=50+index*405; return `<rect x="${x}" y="${y}" width="390" height="125" rx="18" fill="${palette.surface}" stroke="${palette.chart[index]}"/><text x="${x+24}" y="${y+38}" class="name">${escapeMarkup(player.name)}</text><text x="${x+24}" y="${y+91}" class="score">${stats[player.id].score}</text><text x="${x+93}" y="${y+89}" class="small">局</text>`;})); y+=180;
+  if(options.trend&&rounds.length){parts.push(reportChart([...players.map((player)=>({name:player.name,values:[0,...rounds.map((round)=>round.after[player.id]??0)]})),{name:"分差",values:[0,...rounds.map((round)=>(round.after[players[0].id]??0)-(round.after[players[1].id]??0))]}],y,theme)); y+=320;}
+  if(options.stats){parts.push(`<text x="50" y="${y}" class="section">分类统计</text>`); y+=28; parts.push(...players.map((player,index)=>`<rect x="50" y="${y+index*62}" width="800" height="50" rx="12" fill="${palette.surface}"/><text x="70" y="${y+32+index*62}" class="strong">${escapeMarkup(player.name)}</text><text x="250" y="${y+32+index*62}" class="row">普胜 ${stats[player.id].normal}</text><text x="390" y="${y+32+index*62}" class="row">炸清 ${stats[player.id].breakClear}</text><text x="530" y="${y+32+index*62}" class="row">接清 ${stats[player.id].runout}</text><text x="670" y="${y+32+index*62}" class="row">犯规 ${stats[player.id].fouls}</text>`)); y+=players.length*62+42;}
   parts.push(`<text x="50" y="${y}" class="section">逐局比分</text>`); y+=30;
-  parts.push(...rounds.map((round,index)=>{const winner=players.find((player)=>player.id===round.winnerId)?.name??""; const prefix=options.time?`${reportClock(round.confirmedAt)}  `:""; const score=players.map((player)=>round.after[player.id]??0).join(" : "); const note=round.note?` · ${round.note.slice(0,24)}`:""; const rowY=y+index*54; return `<rect x="50" y="${rowY}" width="800" height="45" rx="10" fill="${index%2?"#0d1b16":"#10211a"}"/><text x="70" y="${rowY+29}" class="row">${prefix}第 ${index+1} 局 · ${escapeMarkup(winner)} · ${EIGHT_BALL_WIN_LABELS[round.winType]}${escapeMarkup(note)}</text><text x="780" y="${rowY+29}" text-anchor="end" class="strong">${score}</text>`;})); y+=rounds.length*54+55;
-  const height=Math.max(1200,y); return `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="${height}" viewBox="0 0 900 ${height}">${reportStyles()}${parts.join("")}<text x="450" y="${height-25}" text-anchor="middle" class="small">台球奇招 · MATCH REPORT</text></svg>`;
+  parts.push(...rounds.map((round,index)=>{const winner=players.find((player)=>player.id===round.winnerId)?.name??""; const prefix=options.time?`${reportClock(round.confirmedAt)}  `:""; const score=players.map((player)=>round.after[player.id]??0).join(" : "); const note=round.note?` · ${round.note.slice(0,24)}`:""; const rowY=y+index*54; return `<rect x="50" y="${rowY}" width="800" height="45" rx="10" fill="${index%2?palette.surfaceAlt:palette.surface}"/><text x="70" y="${rowY+29}" class="row">${prefix}第 ${index+1} 局 · ${escapeMarkup(winner)} · ${EIGHT_BALL_WIN_LABELS[round.winType]}${escapeMarkup(note)}</text><text x="780" y="${rowY+29}" text-anchor="end" class="strong">${score}</text>`;})); y+=rounds.length*54+55;
+  const height=Math.max(1200,y); return `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="${height}" viewBox="0 0 900 ${height}">${reportStyles(theme)}${parts.join("")}<text x="450" y="${height-25}" text-anchor="middle" class="small">台球奇招 · MATCH REPORT</text></svg>`;
 }
 
 function exportSnookerJson(match: SnookerMatch) {
@@ -1027,8 +1029,8 @@ function exportSnookerJson(match: SnookerMatch) {
   }, null, 2), "application/json");
 }
 
-function printSnooker(match: SnookerMatch, options: ReportOptions) { return downloadReportPdf(`斯诺克战绩-${match.id}.pdf`, buildSnookerReport(match, options)); }
-function exportSnookerImage(match: SnookerMatch, options: ReportOptions) { return downloadReportPng(`斯诺克战绩-${match.id}.png`, buildSnookerReport(match, options)); }
+function printSnooker(match: SnookerMatch, options: ReportOptions) { const theme=currentReportTheme(); return downloadReportPdf(`斯诺克战绩-${match.id}.pdf`, buildSnookerReport(match, options, theme), theme); }
+function exportSnookerImage(match: SnookerMatch, options: ReportOptions) { const theme=currentReportTheme(); return downloadReportPng(`斯诺克战绩-${match.id}.png`, buildSnookerReport(match, options, theme)); }
 
 type UserDeckSummary = { id: string; name: string; current_version: number; updated_at: number };
 
@@ -1049,8 +1051,8 @@ async function loadUserDeck(id: string): Promise<{ currentVersion: number; snaps
   const payload = await apiPayload<{ deck: { currentVersion: number; snapshot: DeckSnapshot } }>(await fetch(`/api/decks/${id}`));
   return payload.deck;
 }
-function printEightBall(match: EightBallMatch, options: ReportOptions) { return downloadReportPdf(`中八战绩-${match.id}.pdf`, buildEightBallReport(match, options)); }
-function exportEightBallImage(match: EightBallMatch, options: ReportOptions) { return downloadReportPng(`中八战绩-${match.id}.png`, buildEightBallReport(match, options)); }
+function printEightBall(match: EightBallMatch, options: ReportOptions) { const theme=currentReportTheme(); return downloadReportPdf(`中八战绩-${match.id}.pdf`, buildEightBallReport(match, options, theme), theme); }
+function exportEightBallImage(match: EightBallMatch, options: ReportOptions) { const theme=currentReportTheme(); return downloadReportPng(`中八战绩-${match.id}.png`, buildEightBallReport(match, options, theme)); }
 function EightBallBoard({ match, onChange, onFinish, toast }: { match: EightBallMatch; onChange: (match: EightBallMatch) => void; onFinish: () => void; toast: (message: string) => void }) {
   const [, tick] = useState(0); const [winnerId, setWinnerId] = useState(match.players[0].id); const [winType, setWinType] = useState<EightBallWinType>("normal"); const [fouls, setFouls] = useState<Record<string, number>>({}); const [note, setNote] = useState(""); const [roundStartedAt, setRoundStartedAt] = useState(() => Date.now()); const [editingEventId, setEditingEventId] = useState<string | null>(null);
   useEffect(() => { const timer = window.setInterval(() => tick((value) => value + 1), 1000); return () => window.clearInterval(timer); }, []);
@@ -1091,18 +1093,19 @@ function exportScoreJson(match: BilliardsMatch) {
 }
 
 function scoreCategory(label: string) { return ["炸清","接清","结清","大金","小金","犯规","普胜","黑金","让杆"].find((item)=>label.includes(item)) ?? label.replace(/^补录 · /,"").split(" · ")[0]; }
-function buildScoreReport(match: BilliardsMatch, options: ReportOptions) {
+function buildScoreReport(match: BilliardsMatch, options: ReportOptions, theme: ReportTheme = "night") {
+  const palette = REPORT_THEME_PALETTES[theme];
   const rankings=getRankings(match), events=[...match.scoreEvents].sort((a,b)=>a.occurredAt-b.occurredAt), timeline=scoreMatchTimeline(match); let y=250;
-  const parts=[reportHeader(match.mode==="cards"?"奇招卡牌局":"多人追分结算",`${match.players.length} 人 · ${formatDuration(match.startedAt,match.endedAt)} · ${events.length} 条计分`,match.startedAt,options)];
-  parts.push(...rankings.map((player,index)=>{const col=index%2,row=Math.floor(index/2),x=50+col*405,rowY=y+row*112; return `<rect x="${x}" y="${rowY}" width="390" height="96" rx="17" fill="#10211a" stroke="${index===0?"#ffd166":"#28483a"}"/><text x="${x+22}" y="${rowY+34}" class="name">${index+1}. ${escapeMarkup(player.name)}</text><text x="${x+22}" y="${rowY+75}" class="score">${player.score}</text><text x="${x+115}" y="${rowY+72}" class="small">开局 ${player.initialScore} · ${player.score-player.initialScore>=0?"+":""}${player.score-player.initialScore}</text>`;})); y+=Math.ceil(rankings.length/2)*112+45;
-  if(options.trend&&events.length){const scores=Object.fromEntries(match.players.map((player)=>[player.id,player.initialScore])); const values=Object.fromEntries(match.players.map((player)=>[player.id,[player.initialScore]])) as Record<string,number[]>; events.forEach((event)=>{match.players.forEach((player)=>{scores[player.id]+=(event.changes[player.id]??0); values[player.id].push(scores[player.id]);});}); parts.push(reportChart(match.players.map((player)=>({name:player.name,values:values[player.id]})),y)); y+=320;}
-  if(options.stats){const categories=Array.from(new Set(events.filter((event)=>event.type!=="correction").map((event)=>scoreCategory(event.label)))).slice(0,6); parts.push(`<text x="50" y="${y}" class="section">分类次数</text>`); y+=28; parts.push(...match.players.map((player,row)=>{const rowY=y+row*55; return `<rect x="50" y="${rowY}" width="800" height="46" rx="10" fill="#10211a"/><text x="70" y="${rowY+29}" class="strong">${escapeMarkup(player.name)}</text>${categories.map((category,index)=>`<text x="${220+index*100}" y="${rowY+29}" class="row">${escapeMarkup(category)} ${events.filter((event)=>event.type!=="correction"&&event.playerId===player.id&&scoreCategory(event.label)===category).length}</text>`).join("")}`;})); y+=match.players.length*55+45;}
+  const parts=[reportHeader(match.mode==="cards"?"奇招卡牌局":"多人追分结算",`${match.players.length} 人 · ${formatDuration(match.startedAt,match.endedAt)} · ${events.length} 条计分`,match.startedAt,options,theme)];
+  parts.push(...rankings.map((player,index)=>{const col=index%2,row=Math.floor(index/2),x=50+col*405,rowY=y+row*112; return `<rect x="${x}" y="${rowY}" width="390" height="96" rx="17" fill="${palette.surface}" stroke="${index===0?palette.chart[2]:palette.border}"/><text x="${x+22}" y="${rowY+34}" class="name">${index+1}. ${escapeMarkup(player.name)}</text><text x="${x+22}" y="${rowY+75}" class="score">${player.score}</text><text x="${x+115}" y="${rowY+72}" class="small">开局 ${player.initialScore} · ${player.score-player.initialScore>=0?"+":""}${player.score-player.initialScore}</text>`;})); y+=Math.ceil(rankings.length/2)*112+45;
+  if(options.trend&&events.length){const scores=Object.fromEntries(match.players.map((player)=>[player.id,player.initialScore])); const values=Object.fromEntries(match.players.map((player)=>[player.id,[player.initialScore]])) as Record<string,number[]>; events.forEach((event)=>{match.players.forEach((player)=>{scores[player.id]+=(event.changes[player.id]??0); values[player.id].push(scores[player.id]);});}); parts.push(reportChart(match.players.map((player)=>({name:player.name,values:values[player.id]})),y,theme)); y+=320;}
+  if(options.stats){const categories=Array.from(new Set(events.filter((event)=>event.type!=="correction").map((event)=>scoreCategory(event.label)))).slice(0,6); parts.push(`<text x="50" y="${y}" class="section">分类次数</text>`); y+=28; parts.push(...match.players.map((player,row)=>{const rowY=y+row*55; return `<rect x="50" y="${rowY}" width="800" height="46" rx="10" fill="${palette.surface}"/><text x="70" y="${rowY+29}" class="strong">${escapeMarkup(player.name)}</text>${categories.map((category,index)=>`<text x="${220+index*100}" y="${rowY+29}" class="row">${escapeMarkup(category)} ${events.filter((event)=>event.type!=="correction"&&event.playerId===player.id&&scoreCategory(event.label)===category).length}</text>`).join("")}`;})); y+=match.players.length*55+45;}
   parts.push(`<text x="50" y="${y}" class="section">完整事件流水</text>`); y+=30;
-  parts.push(...timeline.map((event,index)=>{const rowY=y+index*55,prefix=options.time?`${reportClock(event.at)}  `:""; const detail=`${prefix}${event.kind} · ${event.player} · ${event.label}`.slice(0,48); return `<rect x="50" y="${rowY}" width="800" height="46" rx="10" fill="${index%2?"#0d1b16":"#10211a"}"/><text x="70" y="${rowY+29}" class="row">${escapeMarkup(detail)}</text><text x="830" y="${rowY+29}" text-anchor="end" class="strong">${escapeMarkup(event.detail.slice(0,28))}</text>`;})); y+=timeline.length*55+55;
-  const height=Math.max(1200,y); return `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="${height}" viewBox="0 0 900 ${height}">${reportStyles()}${parts.join("")}<text x="450" y="${height-25}" text-anchor="middle" class="small">台球奇招 · MATCH REPORT</text></svg>`;
+  parts.push(...timeline.map((event,index)=>{const rowY=y+index*55,prefix=options.time?`${reportClock(event.at)}  `:""; const detail=`${prefix}${event.kind} · ${event.player} · ${event.label}`.slice(0,48); return `<rect x="50" y="${rowY}" width="800" height="46" rx="10" fill="${index%2?palette.surfaceAlt:palette.surface}"/><text x="70" y="${rowY+29}" class="row">${escapeMarkup(detail)}</text><text x="830" y="${rowY+29}" text-anchor="end" class="strong">${escapeMarkup(event.detail.slice(0,28))}</text>`;})); y+=timeline.length*55+55;
+  const height=Math.max(1200,y); return `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="${height}" viewBox="0 0 900 ${height}">${reportStyles(theme)}${parts.join("")}<text x="450" y="${height-25}" text-anchor="middle" class="small">台球奇招 · MATCH REPORT</text></svg>`;
 }
-function printScoreMatch(match: BilliardsMatch, options: ReportOptions) { return downloadReportPdf(`追分战绩-${match.id}.pdf`, buildScoreReport(match, options)); }
-function exportScoreImage(match: BilliardsMatch, options: ReportOptions) { return downloadReportPng(`追分战绩-${match.id}.png`, buildScoreReport(match, options)); }
+function printScoreMatch(match: BilliardsMatch, options: ReportOptions) { const theme=currentReportTheme(); return downloadReportPdf(`追分战绩-${match.id}.pdf`, buildScoreReport(match, options, theme), theme); }
+function exportScoreImage(match: BilliardsMatch, options: ReportOptions) { const theme=currentReportTheme(); return downloadReportPng(`追分战绩-${match.id}.png`, buildScoreReport(match, options, theme)); }
 function UnifiedHistoryPage({ history, eightBallHistory, snookerHistory, teamBattleHistory, selectedId, onSelect, onDeleteMatch }: { history: BilliardsMatch[]; eightBallHistory: EightBallMatch[]; snookerHistory: SnookerMatch[]; teamBattleHistory: TeamBattleMatch[]; selectedId?: string; onSelect: (id: string) => void; onDeleteMatch: (id: string) => void }) {
   const selected = history.find((match) => match.id === selectedId);
   const [reportOptions, setReportOptions] = useState(DEFAULT_REPORT_OPTIONS);
@@ -1216,6 +1219,14 @@ function AccountForm({ onAuthenticated }: { onAuthenticated: (user: AuthUser) =>
 
 type CloudMatchRow = { id: string; mode: string; status: string; version: number; created_at: number; ended_at: number | null };
 
+const cloudMatchModeLabel = (mode: string) => ({
+  team_battle: "团战实时",
+  snooker: "斯诺克",
+  chinese_eight: "中八实时",
+  score_cards: "追分 · 奇招牌",
+  score: "多人追分",
+}[mode] ?? mode);
+
 type CloudRoomRow = {
   matchId: string;
   roomCode: string;
@@ -1285,6 +1296,7 @@ type RealtimeSnapshot = {
   chaseScore: RealtimeChaseScore | null;
   eightBall: RealtimeEightBall | null;
   snooker: RealtimeSnooker | null;
+  teamBattle: RealtimeTeamBattleState | null;
 };
 
 type RealtimeCommandPayload = Record<string, string | number | boolean | Array<string | number> | Record<string, unknown> | undefined>;
@@ -1725,7 +1737,7 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
                 ?? playerId;
             });
             if (notice) setCardNotice(notice);
-            void refreshRoom(activeCode).catch(() => socket.close(1012, "refresh failed"));
+            void refreshRoom(activeCode).catch(() => socket.close(CLIENT_RECONNECT_CLOSE_CODE, "refresh failed"));
             // Convergence rule: when the server changes OUR role, fetch the latest
             // snapshot and reconnect immediately (skipping backoff) so the write
             // capability shown to the user always matches the server authority.
@@ -1776,7 +1788,7 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
     const reconnectNow = () => {
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
       if (socketRef.current) manuallyClosed.add(socketRef.current);
-      socketRef.current?.close(1012, "network restored");
+      socketRef.current?.close(CLIENT_RECONNECT_CLOSE_CODE, "network restored");
       connect();
     };
     window.addEventListener("online", reconnectNow);
@@ -1977,7 +1989,7 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
 
   const renamePlayer = async (playerId: string, nickname: string) => {
     if (!snapshot) return;
-    const nextName = window.prompt("输入新的选手名", nickname)?.trim().slice(0, 12);
+    const nextName = window.prompt("输入新的选手名", nickname)?.trim().slice(0, snapshot.teamBattle ? 20 : 12);
     if (!nextName || nextName === nickname) return;
     setBusy(true); setMessage("");
     try {
@@ -2026,7 +2038,9 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
   const claimSeatForMember = async (member: RealtimeMember, playerId: string) => {
     if (!snapshot) return;
     const seat = snapshot.chaseScore?.players.find((player) => player.id === playerId && player.active && !player.userId)
-      ?? snapshot.eightBall?.players.find((player) => player.id === playerId && !player.userId);
+      ?? snapshot.eightBall?.players.find((player) => player.id === playerId && !player.userId)
+      ?? snapshot.snooker?.players.find((player) => player.id === playerId && !player.userId)
+      ?? snapshot.teamBattle?.match.players.map((player) => ({ ...player, nickname: player.name, userId: snapshot.teamBattle!.seats.find((item) => item.playerId === player.id)?.userId })).find((player) => player.id === playerId && !player.userId);
     if (!seat) { setMessage("没有可认领的空席位"); return; }
     setBusy(true); setMessage("");
     try {
@@ -2059,7 +2073,9 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
   const self = snapshot?.members.find((member) => member.userId === user.id);
   const isHost = self?.role === "host";
   const canWrite = self?.role === "host" || self?.role === "player";
-  const roomPlayers = snapshot?.chaseScore?.players.filter((player) => player.active) ?? snapshot?.eightBall?.players ?? [];
+  const roomPlayers = snapshot?.teamBattle
+    ? snapshot.teamBattle.match.players.map((player) => ({ id: player.id, nickname: player.name, userId: snapshot.teamBattle!.seats.find((seat) => seat.playerId === player.id)?.userId }))
+    : snapshot?.chaseScore?.players.filter((player) => player.active) ?? snapshot?.eightBall?.players ?? snapshot?.snooker?.players ?? [];
   const unclaimedSeats = roomPlayers.filter((player) => !player.userId);
   const sendCommand = (kind: string, payload: RealtimeCommandPayload) => {
     const socket = socketRef.current;
@@ -2086,7 +2102,7 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
           : <><h2>{cardNotice.playerName}{cardNotice.action === "play" ? "使用了" : "安全跳过了"}「{cardNotice.card!.title}」</h2><p>{cardNotice.card!.effect}</p></>}
       </section>
     </div>}
-    {roomCode ? <section className="room-topbar"><div><span className="live-label"><i /> 云端实时对局</span><h1>{snapshot?.chaseScore ? (snapshot.chaseScore.mode === "score_cards" ? "追分 · 奇招牌" : "多人追分") : snapshot?.eightBall ? "中八实时" : "进入房间…"}</h1><p>房间码 {activeCode || roomCode} · {connectionLabel}{snapshot ? ` · 版本 ${snapshot.version}` : ""}</p></div><div className="room-topbar-actions"><SpaLink className="secondary" href="/" navigate={onNavigate}>← 返回</SpaLink><button className="secondary" onClick={() => void navigator.clipboard?.writeText(activeCode || roomCode)}>复制房间码</button><button className="secondary" disabled={busy} onClick={() => void refreshRoom()}>刷新状态</button>{snapshot && isHost && snapshot.status !== "completed" && <button className="danger-button" disabled={busy} onClick={() => void completeRoom()}>结束对局</button>}{snapshot && !isHost && snapshot.status !== "completed" && <button className="danger-button" disabled={busy} onClick={() => void leaveRoom()}>离开房间</button>}</div></section> : <header className="page-title"><p className="kicker">REALTIME ROOM</p><h1>多人实时房间</h1><p>创建或加入云端实时房间，全屏共同操作，多人实时同步。</p></header>}
+    {roomCode ? <section className="room-topbar"><div><span className="live-label"><i /> 云端实时对局</span><h1>{snapshot?.teamBattle ? "团战实时" : snapshot?.chaseScore ? (snapshot.chaseScore.mode === "score_cards" ? "追分 · 奇招牌" : "多人追分") : snapshot?.eightBall ? "中八实时" : snapshot?.snooker ? "斯诺克实时" : "进入房间…"}</h1><p>房间码 {activeCode || roomCode} · {connectionLabel}{snapshot ? ` · 版本 ${snapshot.version}` : ""}</p></div><div className="room-topbar-actions"><SpaLink className="secondary" href="/" navigate={onNavigate}>← 返回</SpaLink><button className="secondary" onClick={() => void navigator.clipboard?.writeText(activeCode || roomCode)}>复制房间码</button><button className="secondary" disabled={busy} onClick={() => void refreshRoom()}>刷新状态</button>{snapshot && isHost && snapshot.status !== "completed" && <button className="danger-button" disabled={busy} onClick={() => void completeRoom()}>结束对局</button>}{snapshot && !isHost && snapshot.status !== "completed" && <button className="danger-button" disabled={busy} onClick={() => void leaveRoom()}>离开房间</button>}</div></section> : <header className="page-title"><p className="kicker">REALTIME ROOM</p><h1>多人实时房间</h1><p>创建或加入云端实时房间，全屏共同操作，多人实时同步。</p></header>}
     {roomCode ? (!snapshot ? <section className="room-entering"><p className="kicker">CONNECTING</p><h2>正在进入房间…</h2></section> : <>
       <div className="room-code-card"><div><span>房间码</span><strong>{activeCode}</strong><small>版本 {snapshot.version} · {snapshot.events.length} 条事件{snapshot.status === "completed" ? " · 已结束" : ""}</small></div><button className="secondary" onClick={() => void navigator.clipboard?.writeText(activeCode)}>复制房间码</button></div>
       {snapshot.chaseScore && <RealtimeChasePanel snapshot={snapshot} writable={!!canWrite && connection === "connected" && snapshot.status !== "completed"} busy={busy} onCommand={sendCommand} isHost={isHost} onRemovePlayer={isHost ? (playerId, nickname) => void removePlayer(playerId, nickname) : undefined} />}
@@ -2095,6 +2111,7 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
       {snapshot.eightBall?.cards && <RealtimeCardPanel players={snapshot.eightBall.players} cards={snapshot.eightBall.cards} writable={!!canWrite && connection === "connected" && snapshot.status !== "completed"} busy={busy} isHost={isHost} viewerUserId={user.id} viewerRole={self?.role ?? "spectator"} onCommand={sendCommand} />}
       {snapshot.snooker && <RealtimeSnookerPanel snapshot={snapshot} writable={!!canWrite && connection === "connected" && snapshot.status !== "completed"} busy={busy} onCommand={sendCommand} isHost={isHost} />}
       {snapshot.snooker?.cards && <RealtimeCardPanel players={snapshot.snooker.players} cards={snapshot.snooker.cards} writable={!!canWrite && connection === "connected" && snapshot.status !== "completed"} busy={busy} isHost={isHost} viewerUserId={user.id} viewerRole={self?.role ?? "spectator"} onCommand={sendCommand} />}
+      {snapshot.teamBattle && <RealtimeTeamBattlePanel key={`${snapshot.matchId}:${snapshot.version}`} state={snapshot.teamBattle} writable={!!isHost && connection === "connected" && snapshot.status !== "completed"} busy={busy} isHost={isHost} onCommand={sendCommand} />}
       <div className="room-members">{snapshot.members.map((member) => {
         const claimedSeat = roomPlayers.find((player) => player.userId === member.userId);
         const claimTarget = claimTargets[member.userId] ?? (unclaimedSeats.some((seat) => seat.id === selectedSeatId) ? selectedSeatId : unclaimedSeats[0]?.id ?? "");
@@ -2102,9 +2119,9 @@ function RealtimeRoomPanel({ user, roomCode = "", onNavigate }: { user: AuthUser
       })}</div>
       {isHost && kickedMembers.length > 0 && <div className="room-kicked"><p className="kicker">KICKED</p><h3>已移出的成员</h3>{kickedMembers.map((member) => <article key={member.userId}><span>{memberDisplayName(member).slice(0, 1)}</span><div><b>{memberDisplayName(member)}</b><small>{formatTime(member.kickedAt)} 被移除</small></div><button className="secondary" disabled={busy} onClick={() => void unbanMember(member)}>解除限制</button></article>)}</div>}
       {kicked && <p className="readonly-hint">你已被移出该房间，连接已断开。</p>}
-    </>) : <div className="room-entry-grid"><div><b>创建房间</b><small>选择本人未结束的云端对局</small><select name="cloud-match" autoComplete="off" aria-label="选择云端对局" value={selectedMatchId} onChange={(event) => { setSelectedMatchId(event.target.value); setRecoverableCode(""); }}><option value="">选择云端对局</option>{matches.map((match) => <option value={match.id} key={match.id}>{match.mode} · {formatTime(match.created_at)}</option>)}</select><button className="primary" disabled={busy || !selectedMatchId} onClick={() => void createRoom()}>{recoverableCode ? `重新连接房间 ${recoverableCode}` : "创建实时房间"}</button></div><div><b>输入房间码</b><small>加入后默认为观战者，由房主提升为玩家</small><input name="room-code" autoComplete="off" spellCheck={false} aria-label="实时房间码" maxLength={6} value={codeInput} onChange={(event) => setCodeInput(event.target.value.toUpperCase())} placeholder="例如：ABC234…" /><button className="secondary" disabled={busy} onClick={() => void joinRoom()}>加入房间</button></div></div>}
+    </>) : <div className="room-entry-grid"><div><b>创建房间</b><small>选择本人未结束的云端对局</small><select name="cloud-match" autoComplete="off" aria-label="选择云端对局" value={selectedMatchId} onChange={(event) => { setSelectedMatchId(event.target.value); setRecoverableCode(""); }}><option value="">选择云端对局</option>{matches.map((match) => <option value={match.id} key={match.id}>{cloudMatchModeLabel(match.mode)} · {formatTime(match.created_at)}</option>)}</select><button className="primary" disabled={busy || !selectedMatchId} onClick={() => void createRoom()}>{recoverableCode ? `重新连接房间 ${recoverableCode}` : "创建实时房间"}</button></div><div><b>输入房间码</b><small>加入后默认为观战者，由房主提升为玩家</small><input name="room-code" autoComplete="off" spellCheck={false} aria-label="实时房间码" maxLength={6} value={codeInput} onChange={(event) => setCodeInput(event.target.value.toUpperCase())} placeholder="例如：ABC234…" /><button className="secondary" disabled={busy} onClick={() => void joinRoom()}>加入房间</button></div></div>}
     {message && <p className="form-message" role="status">{message}</p>}
-    {roomCode && <div className="room-dock"><button className="dock-main" disabled={!snapshot} onClick={() => document.querySelector(".realtime-score-board, .realtime-eight-board")?.scrollIntoView({ behavior: preferredScrollBehavior() })}><span aria-hidden="true">◎</span><b>计分</b></button><button onClick={() => document.querySelector(".room-members")?.scrollIntoView({ behavior: preferredScrollBehavior() })}><span aria-hidden="true">◉</span><b>成员</b></button></div>}
+    {roomCode && <div className="room-dock"><button className="dock-main" disabled={!snapshot} onClick={() => document.querySelector(".realtime-score-board, .realtime-eight-board, .realtime-team-battle")?.scrollIntoView({ behavior: preferredScrollBehavior() })}><span aria-hidden="true">◎</span><b>计分</b></button><button onClick={() => document.querySelector(".room-members")?.scrollIntoView({ behavior: preferredScrollBehavior() })}><span aria-hidden="true">◉</span><b>成员</b></button></div>}
   </div>;
 }
 
@@ -2133,14 +2150,14 @@ function CloudMatchesPanel({ ensureDevice, onRestore }: { ensureDevice: () => Pr
         }));
       }
       const snapshot: unknown = JSON.parse(detail.match.snapshot_json);
-      if (!isStoredMatch(snapshot) && !isEightBallMatch(snapshot) && !isSnookerMatch(snapshot)) throw new Error("云端快照与当前版本不兼容");
+      if (!isStoredMatch(snapshot) && !isEightBallMatch(snapshot) && !isSnookerMatch(snapshot) && !isTeamBattleMatch(snapshot)) throw new Error("云端快照与当前版本不兼容");
       onRestore(snapshot, !takeover);
       setMessage(takeover ? "已接管并恢复云端最新版本" : "已按只读模式恢复云端快照");
       await load();
     } catch (error) { setMessage(error instanceof Error ? error.message : "云端恢复失败"); }
     finally { setBusyId(""); }
   };
-  return <section className="cloud-matches"><header><div><p className="kicker">CLOUD RECOVERY</p><h2>云端对局</h2></div><button className="secondary" onClick={() => void load()}>刷新</button></header>{matches.length ? matches.map((row) => <article key={row.id}><div><b>{row.mode} · {row.status === "completed" ? "已结束" : "进行中"}</b><small>{formatTime(row.created_at)} · 云端版本 {row.version}</small></div><div><button className="secondary" disabled={busyId === row.id} onClick={() => void restore(row, false)}>只读恢复</button>{row.status !== "completed" && <button className="primary" disabled={busyId === row.id} onClick={() => void restore(row, true)}>明确接管</button>}</div></article>) : <p className="empty-copy">当前账号还没有云端对局。</p>}{message && <p className="form-message" role="status">{message}</p>}<small>接管不会合并两台设备的离线修改；服务端会拒绝有效租约、旧版本和无权设备。</small></section>;
+  return <section className="cloud-matches"><header><div><p className="kicker">CLOUD RECOVERY</p><h2>云端对局</h2></div><button className="secondary" onClick={() => void load()}>刷新</button></header>{matches.length ? matches.map((row) => <article key={row.id}><div><b>{cloudMatchModeLabel(row.mode)} · {row.status === "completed" ? "已结束" : "进行中"}</b><small>{formatTime(row.created_at)} · 云端版本 {row.version}</small></div><div><button className="secondary" disabled={busyId === row.id} onClick={() => void restore(row, false)}>只读恢复</button>{row.status !== "completed" && <button className="primary" disabled={busyId === row.id} onClick={() => void restore(row, true)}>明确接管</button>}</div></article>) : <p className="empty-copy">当前账号还没有云端对局。</p>}{message && <p className="form-message" role="status">{message}</p>}<small>接管不会合并两台设备的离线修改；服务端会拒绝有效租约、旧版本和无权设备。</small></section>;
 }
 
 function AccountDataDialog({ onClose, onDeleted }: { onClose: () => void; onDeleted: () => void }) {
@@ -2179,11 +2196,12 @@ function AccountDataDialog({ onClose, onDeleted }: { onClose: () => void; onDele
     setReportError(""); setConverting(format);
     try {
       const match = parseMatchReport(reportJson);
-      const svg = isSnookerMatch(match) ? buildSnookerReport(match, reportOptions) : isEightBallMatch(match) ? buildEightBallReport(match, reportOptions) : buildScoreReport(match, reportOptions);
+      const theme = currentReportTheme();
+      const svg = isSnookerMatch(match) ? buildSnookerReport(match, reportOptions, theme) : isEightBallMatch(match) ? buildEightBallReport(match, reportOptions, theme) : buildScoreReport(match, reportOptions, theme);
       if (format === "png") {
         downloadBlob(`${reportName}-长图.png`, await renderReportPng(svg));
       } else {
-        downloadBlob(`${reportName}.pdf`, await renderReportPdf(svg));
+        downloadBlob(`${reportName}.pdf`, await renderReportPdf(svg, theme));
       }
     } catch (error) { setReportError(error instanceof Error ? error.message : "转换失败"); }
     finally { setConverting(""); }
@@ -2308,7 +2326,7 @@ export default function GameApp() {
       themeColor.name = "theme-color";
       document.head.appendChild(themeColor);
     }
-    themeColor.content = theme === "day" ? "#f7fbf7" : "#07100d";
+    themeColor.content = APP_THEME_COLORS[theme];
     browserStore().setRaw(APP_THEME_KEY, theme);
   }, [theme]);
 
@@ -2625,6 +2643,11 @@ export default function GameApp() {
           ? { ...current, eightBallHistory: [match, ...current.eightBallHistory.filter((item) => item.id !== match.id)] }
           : { ...current, activeEightBallMatch: match };
       }
+      if (isTeamBattleMatch(match)) {
+        return match.status === "completed"
+          ? { ...current, teamBattleHistory: [match, ...current.teamBattleHistory.filter((item) => item.id !== match.id)] }
+          : { ...current, activeTeamBattleMatch: match };
+      }
       return match.status === "completed"
         ? { ...current, history: [match, ...current.history.filter((item) => item.id !== match.id)] }
         : { ...current, activeMatch: match };
@@ -2748,7 +2771,7 @@ export default function GameApp() {
       {setupMode && <SetupDialog initialMode={setupMode} savedRules={data.savedRules} scorePresets={data.scorePresets} onClose={() => setSetupMode(null)} onStart={start} user={user} onCloudRoomCreated={enterCloudRoom} />}
       {eightSetupOpen && <EightBallSetupDialog defaultLayout={eightDefaultLayout} onClose={() => setEightSetupOpen(false)} onStart={startEight} user={user} onCloudRoomCreated={enterCloudRoom} />}
       {snookerSetupOpen && <SnookerSetupDialog onClose={() => setSnookerSetupOpen(false)} onStart={startSnooker} user={user} onCloudRoomCreated={(code, matchId, operationId) => { if (matchId && operationId) recordDirectRoomLink(matchId, operationId); enterCloudRoom(code); }} />}
-      {teamBattleSetupOpen && <TeamBattleSetupDialog onClose={() => setTeamBattleSetupOpen(false)} onStart={startTeamBattle} />}
+      {teamBattleSetupOpen && <TeamBattleSetupDialog onClose={() => setTeamBattleSetupOpen(false)} onStart={startTeamBattle} user={user} onCloudRoomCreated={(code, matchId, operationId) => { recordDirectRoomLink(matchId, operationId); setTeamBattleSetupOpen(false); enterCloudRoom(code); }} />}
       {confirmEnd && <ConfirmDialog title="结束本场对局？" body="系统会保存最终结果、完整流水和更正记录。" onCancel={() => setConfirmEnd(false)} onConfirm={data.activeTeamBattleMatch ? completeTeamBattle : data.activeSnookerMatch ? completeSnooker : data.activeEightBallMatch ? completeEight : complete} />}
       {deleteTarget && <DeleteMatchDialog
         label={deleteTarget.kind === "team" ? "团战记分" : deleteTarget.kind === "snooker" ? "斯诺克" : deleteTarget.kind === "eight" ? "中八双人赛" : deleteTarget.match.mode === "cards" ? "奇招牌" : deleteTarget.match.mode === "score_cards" ? "追分 + 奇招牌" : "多人追分"}
