@@ -82,7 +82,7 @@ function retryDelay(attempts: number): number {
 
 export async function flushSyncQueue(
   store: VersionedLocalStore,
-  options: { deviceId: string; fetcher?: typeof fetch; now?: number; maxItems?: number },
+  options: { deviceId: string; fetcher?: typeof fetch; now?: number; maxItems?: number; timeoutMs?: number; signal?: AbortSignal },
 ): Promise<FlushResult> {
   const fetcher = options.fetcher ?? fetch;
   const now = options.now ?? Date.now();
@@ -102,10 +102,13 @@ export async function flushSyncQueue(
     store.write(SYNC_QUEUE_CODEC, { version: 1, items });
     processed += 1;
     try {
+      const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? 15_000);
+      const signal = options.signal ? AbortSignal.any([options.signal, timeoutSignal]) : timeoutSignal;
       const response = await fetcher("/api/migrations/local", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ batchId: item.batchId, deviceId: options.deviceId, item: item.resource }),
+        signal,
       });
       const payload = await response.json() as { result?: "accepted" | "duplicate"; resourceId?: string; error?: string };
       if (response.ok && payload.resourceId && (payload.result === "accepted" || payload.result === "duplicate")) {

@@ -28,6 +28,7 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM users"),
     env.DB.prepare("DELETE FROM admin_sessions"),
     env.DB.prepare("DELETE FROM admin_audit_events"),
+    env.DB.prepare("DELETE FROM auth_rate_limits"),
     env.DB.prepare("DELETE FROM admin_users"),
   ]);
   const digest = await digestPassword(env.PASSWORD_HMAC_KEY, "admin", "secret1");
@@ -203,9 +204,9 @@ describe("administrator authentication HTTP API", () => {
          VALUES (?1, 'PUBALPHA', '甲选手', 'https://example.com/a.png', 300, 301)`,
       ).bind(userId),
       env.DB.prepare(
-        `INSERT INTO sessions (id, user_id, token_digest, created_at, last_used_at)
-         VALUES ('40000000-0000-4000-8000-000000000001', ?1, 'user-token-digest', 310, 320)`,
-      ).bind(userId),
+        `INSERT INTO sessions (id, user_id, token_digest, created_at, last_used_at, expires_at)
+         VALUES ('40000000-0000-4000-8000-000000000001', ?1, 'user-token-digest', 310, 320, ?2)`,
+      ).bind(userId, Date.now() + 60_000),
       env.DB.prepare(
         `INSERT INTO matches (id, owner_user_id, mode, status, created_at, updated_at, started_at, ended_at)
          VALUES ('20000000-0000-4000-8000-000000000001', ?1, 'eight-ball', 'completed', 400, 410, 401, 409)`,
@@ -322,10 +323,26 @@ describe("administrator authentication HTTP API", () => {
     expect((await post("/api/auth/login", { username: "alpha", password: "old-secret-1" })).status).toBe(401);
     const newLogin = await post("/api/auth/login", { username: "alpha", password: body.newPassword });
     expect(newLogin.status).toBe(200);
+    await expect(newLogin.clone().json()).resolves.toMatchObject({
+      user: { mustChangePassword: true },
+      session: { authenticated: true, mustChangePassword: true },
+    });
     const userCookie = (newLogin.headers.get("Set-Cookie") ?? "").split(";", 1)[0];
     expect((await SELF.fetch("http://example.com/api/history", {
       headers: { Cookie: userCookie },
+    })).status).toBe(428);
+    const changed = await SELF.fetch("http://example.com/api/auth/change-password", {
+      method: "POST",
+      headers: { Cookie: userCookie, Origin: "http://example.com", "Content-Type": "application/json" },
+      body: JSON.stringify({ currentPassword: "123456", newPassword: "alpha-new-secret" }),
+    });
+    expect(changed.status).toBe(200);
+    const changedCookie = (changed.headers.get("Set-Cookie") ?? "").split(";", 1)[0];
+    expect((await SELF.fetch("http://example.com/api/history", {
+      headers: { Cookie: changedCookie },
     })).status).toBe(200);
+    await expect(env.DB.prepare("SELECT password_reset_at FROM users WHERE id = ?1")
+      .bind(userId).first<number | null>("password_reset_at")).resolves.toBeNull();
   });
 
   it("deletes a user account after administrator password and username confirmation", async () => {

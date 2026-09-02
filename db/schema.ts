@@ -73,10 +73,12 @@ export const sessions = sqliteTable(
     tokenDigest: text("token_digest").notNull(),
     createdAt: integer("created_at").notNull().default(sql`(unixepoch() * 1000)`),
     lastUsedAt: integer("last_used_at").notNull().default(sql`(unixepoch() * 1000)`),
+    expiresAt: integer("expires_at").notNull(),
     revokedAt: integer("revoked_at"),
   },
   (table) => [
     uniqueIndex("sessions_token_digest_uq").on(table.tokenDigest),
+    index("sessions_expires_idx").on(table.expiresAt),
     index("sessions_user_revoked_last_used_idx").on(
       table.userId,
       table.revokedAt,
@@ -198,6 +200,16 @@ export const decks = sqliteTable(
     check("decks_visibility_ck", sql`${table.visibility} in ('private', 'shared')`),
     check("decks_current_version_ck", sql`${table.currentVersion} >= 0`),
   ],
+);
+
+export const authRateLimits = sqliteTable(
+  "auth_rate_limits",
+  {
+    bucketKey: text("bucket_key").primaryKey(),
+    windowStartedAt: integer("window_started_at").notNull(),
+    attempts: integer("attempts").notNull(),
+  },
+  (table) => [index("auth_rate_limits_window_idx").on(table.windowStartedAt)],
 );
 
 export const adminUsers = sqliteTable(

@@ -53,7 +53,7 @@ if (typeof password !== "string" || password.length < 6 || password.length > 64)
 const hmacKey = await readHidden("PASSWORD_HMAC_KEY: ");
 if (typeof hmacKey !== "string" || hmacKey.length < 16) throw new Error("PASSWORD_HMAC_KEY is too short");
 
-const database = environment === "preview" ? "hei8-r3-preview" : "hei8-r3-production";
+const database = environment === "preview" ? "hei8-r3-preview" : "hei8-r3-production-v2";
 const lookup = runWrangler(database, `SELECT id FROM users WHERE normalized_username = '${username}'`);
 const userId = lookup?.[0]?.results?.[0]?.id;
 if (typeof userId !== "string") throw new Error("User not found");
@@ -66,7 +66,10 @@ const auditId = randomUUID();
 const requestId = `admin-cli:${randomUUID()}`;
 runWrangler(
   database,
-  `UPDATE users SET password_digest = '${digest}', password_version = 1, updated_at = ${now} WHERE id = '${userId}';
+  `UPDATE users
+      SET password_digest = '${digest}', password_version = password_version + 1,
+          password_reset_at = ${now}, updated_at = ${now}
+    WHERE id = '${userId}';
    DELETE FROM sessions WHERE user_id = '${userId}';
    INSERT INTO auth_audit_events (id, user_id, action, outcome, request_id, metadata_json, created_at)
    VALUES ('${auditId}', '${userId}', 'admin_reset_password', 'success', '${requestId}', '{}', ${now});`,

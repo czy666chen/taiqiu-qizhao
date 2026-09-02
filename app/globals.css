@@ -426,6 +426,7 @@ html[data-theme="day"] .raw-events pre, html[data-theme="day"] .json-report-tool
 .account-panel .segmented { max-width: 360px; margin-bottom: 18px; }.account-panel form { display: grid; gap: 14px; max-width: 520px; }.account-panel label { display: grid; gap: 7px; color: var(--muted); font-size: 11px; }.account-panel input { width: 100%; min-height: 42px; padding: 0 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel-2); color: var(--text); }.account-panel small, .cloud-matches > small { display: block; margin-top: 14px; color: var(--muted); line-height: 1.6; }.form-message { margin: 14px 0 0; color: var(--gold); }
 .profile-account-actions { display: grid; gap: 8px; }
 .account-security-dialog { width: min(520px, calc(100% - 32px)); padding: 0; color: var(--text); }.account-security-dialog::backdrop { background: #020705da; backdrop-filter: blur(8px); }.account-security-dialog .icon-button { width: 44px; height: 44px; }.account-security-form { display: grid; gap: 14px; padding-top: 24px; padding-bottom: 24px; }.account-security-form label { display: grid; gap: 7px; color: var(--muted); font-size: 11px; }.account-security-form input { width: 100%; min-height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--panel-2); }.account-security-form small { color: var(--muted); line-height: 1.6; }
+.migration-panel > button { inline-size: min(210px, 100%); }
 .data-control-trigger { justify-self: start; }
 .account-data-dialog { width: min(1120px, calc(100% - 48px)); max-height: calc(100dvh - 48px); padding: 0; color: var(--text); }
 .account-data-dialog::backdrop { background: #020705da; backdrop-filter: blur(8px); }
@@ -540,6 +541,13 @@ html[data-theme="day"] .raw-events pre, html[data-theme="day"] .json-report-tool
 .card-catalog-modal::backdrop { background: #020705da; backdrop-filter: blur(8px); }
 .catalog-modal-body { padding: 24px 30px 30px; }
 .catalog-modal-body > .search { margin: 0 0 20px auto; }
+.card-catalog-modal .search { display: grid; grid-template-columns: 44px minmax(0, 1fr); overflow: hidden; }
+.card-catalog-modal .search > span { display: grid; align-self: stretch; padding: 0; place-items: center; background: transparent; }
+.card-catalog-modal .search > input[type="search"] { min-width: 0; min-height: 40px; padding: 0 12px; border: 0; border-radius: 0; outline: 0; background: transparent; box-shadow: none; }
+html[data-theme="day"] .card-catalog-modal .search > input[type="search"] { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+html[data-theme="day"] .card-catalog-modal .search > span { background: transparent; }
+.card-catalog-modal .search > input[type="search"]:focus-visible,
+html[data-theme="day"] .card-catalog-modal .search > input[type="search"]:focus-visible { border: 0; outline: 0; box-shadow: none; }
 
 html[data-theme="day"] .card-catalog-modal::backdrop { background: rgba(16, 32, 25, .36); }
 html[data-theme="day"] .deck-list article { border-color: #d7e8dc; background: linear-gradient(135deg, rgba(22, 131, 74, .045), transparent 58%), #ffffff; box-shadow: 0 8px 20px rgba(20, 85, 43, .06); }

@@ -1,3 +1,4 @@
+-- Keep this trigger migration LF-only; Cloudflare D1 remote splitting rejects CRLF trigger bodies.
 CREATE TRIGGER `users_registration_username_insert_ck`
 BEFORE INSERT ON `users`
 FOR EACH ROW

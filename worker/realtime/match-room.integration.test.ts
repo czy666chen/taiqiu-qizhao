@@ -39,6 +39,7 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM matches"),
     env.DB.prepare("DELETE FROM devices"),
     env.DB.prepare("DELETE FROM auth_audit_events"),
+    env.DB.prepare("DELETE FROM auth_rate_limits"),
     env.DB.prepare("DELETE FROM users"),
   ]);
 });
@@ -63,6 +64,18 @@ async function register(username = "room_host"): Promise<{ cookie: string; userI
 }
 
 describe("R4 MatchRoom Durable Object", () => {
+  it("rejects oversized realtime JSON before parsing it", async () => {
+    const host = await register("large_body_host");
+    const response = await SELF.fetch("http://example.com/api/realtime/rooms", {
+      method: "POST",
+      headers: { Cookie: host.cookie, "Content-Type": "application/json", Origin: "http://example.com" },
+      body: JSON.stringify({ padding: "x".repeat(70 * 1024) }),
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: "请求体过大" });
+  });
+
   it("retries a transient room initialization failure exactly once", async () => {
     const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     let calls = 0;
@@ -317,6 +330,13 @@ describe("R4 MatchRoom Durable Object", () => {
     const playerA = await room.getSnapshotFor({ userId: "user-a", role: "player" });
     expect(playerA.events.find((event) => event.kind === "card.played")?.payload.card).toBeTruthy();
     expect(playerA.events.find((event) => event.kind === "card.drawn")?.payload.card).toBeUndefined();
+    await expect(room.submitCommand({
+      operationId: "draw-card",
+      expectedVersion: 3,
+      actorUserId: "user-a",
+      kind: "card.draw",
+      payload: { playerId: "player-1", count: 1 },
+    })).resolves.toEqual({ ok: false, code: "invalid_command", currentVersion: 3 });
   });
 
   it("falls back to a bounded current snapshot when a reconnect gap is too large", async () => {

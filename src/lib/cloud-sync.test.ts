@@ -84,6 +84,19 @@ describe("persistent offline sync queue", () => {
     expect(store.read(SYNC_QUEUE_CODEC).value.items[0].state).toBe("auth_required");
   });
 
+  it("times out a stalled cloud upload and leaves it retryable", async () => {
+    const store = new VersionedLocalStore(new MemoryStorageAdapter());
+    enqueueMigrationResources(store, migration(), 100);
+    const fetcher = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+    }));
+
+    await expect(flushSyncQueue(store, {
+      deviceId: crypto.randomUUID(), fetcher: fetcher as typeof fetch, now: 300, timeoutMs: 1,
+    })).resolves.toMatchObject({ failed: 1, remaining: 2 });
+    expect(store.read(SYNC_QUEUE_CODEC).value.items[0]).toMatchObject({ state: "failed", attempts: 1 });
+  });
+
   it("drops queued uploads of a deleted match so it can never be re-synced", () => {
     const store = new VersionedLocalStore(new MemoryStorageAdapter());
     enqueueMigrationResources(store, migration(), 100);

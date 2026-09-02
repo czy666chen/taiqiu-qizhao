@@ -196,6 +196,7 @@ export function RealtimeTeamBattlePanel({
   const disabled = busy || !writable;
   const roundDisabled = disabled || !!match.pausedAt;
   const playerName = (id: string) => match.players.find((player) => player.id === id)?.name ?? id;
+  const roundNumber = (round: EffectiveTeamBattleRound) => projection.rounds.findIndex(({ eventId }) => eventId === round.eventId) + 1;
   const resetDraft = () => {
     setWinnerId(pair[0]);
     setWinType("normal");
@@ -225,7 +226,7 @@ export function RealtimeTeamBattlePanel({
     setEditingEventId(round.eventId);
     document.querySelector(".realtime-team-battle .team-round-panel")?.scrollIntoView({ behavior: preferredScrollBehavior() });
   };
-  const ledgerRow = (round: EffectiveTeamBattleRound, editable = false) => <article key={round.eventId}><span>第 {round.sequenceNo} 局</span><div><b>{playerName(round.playerIds[0])} vs {playerName(round.playerIds[1])}</b><small>{playerName(round.winnerId)} · {WIN_LABELS[round.winType]} · 犯规 {round.playerIds.map((id) => `${playerName(id)} ${round.fouls[id] ?? 0}`).join(" / ")}{round.note ? ` · ${round.note}` : ""}</small></div><strong>{round.after[round.playerIds[0]] ?? 0} : {round.after[round.playerIds[1]] ?? 0}</strong>{editable && isHost && <button disabled={disabled} onClick={() => editRound(round)}>更正</button>}</article>;
+  const ledgerRow = (round: EffectiveTeamBattleRound, editable = false) => <article key={round.eventId}><span>第 {roundNumber(round)} 局</span><div><b>{playerName(round.playerIds[0])} vs {playerName(round.playerIds[1])}</b><small>{playerName(round.winnerId)} · {WIN_LABELS[round.winType]} · 犯规 {round.playerIds.map((id) => `${playerName(id)} ${round.fouls[id] ?? 0}`).join(" / ")}{round.note ? ` · ${round.note}` : ""}</small></div><strong>{round.after[round.playerIds[0]] ?? 0} : {round.after[round.playerIds[1]] ?? 0}</strong>{editable && isHost && <button disabled={disabled} onClick={() => editRound(round)}>更正</button>}</article>;
   const statusMessage = !isHost
     ? "当前为只读模式，由房主负责团战计分。"
     : !writable
@@ -308,7 +309,8 @@ export function TeamBattleBoard({ match, onChange, onFinish, toast }: { match: T
     || (ledgerFilter.startsWith("player:") && round.playerIds.includes(ledgerFilter.slice(7)))
     || (ledgerFilter.startsWith("pair:") && teamBattlePairKey(...round.playerIds) === ledgerFilter.slice(5)));
   const playerName = (id: string) => match.players.find((player) => player.id === id)?.name ?? id;
-  const ledgerRow = (round: EffectiveTeamBattleRound) => <article key={round.eventId}><span>第 {round.sequenceNo} 局</span><div><b>{playerName(round.playerIds[0])} vs {playerName(round.playerIds[1])}</b><small>{playerName(round.winnerId)} · {WIN_LABELS[round.winType]} · 犯规 {round.playerIds.map((id) => `${playerName(id)} ${round.fouls[id] ?? 0}`).join(" / ")}{round.note ? ` · ${round.note}` : ""}</small></div><strong>{round.after[round.playerIds[0]] ?? 0} : {round.after[round.playerIds[1]] ?? 0}</strong><button onClick={() => editRound(round)}>更正</button></article>;
+  const roundNumber = (round: EffectiveTeamBattleRound) => projection.rounds.findIndex(({ eventId }) => eventId === round.eventId) + 1;
+  const ledgerRow = (round: EffectiveTeamBattleRound) => <article key={round.eventId}><span>第 {roundNumber(round)} 局</span><div><b>{playerName(round.playerIds[0])} vs {playerName(round.playerIds[1])}</b><small>{playerName(round.winnerId)} · {WIN_LABELS[round.winType]} · 犯规 {round.playerIds.map((id) => `${playerName(id)} ${round.fouls[id] ?? 0}`).join(" / ")}{round.note ? ` · ${round.note}` : ""}</small></div><strong>{round.after[round.playerIds[0]] ?? 0} : {round.after[round.playerIds[1]] ?? 0}</strong><button onClick={() => editRound(round)}>更正</button></article>;
 
   return <div className="eight-page team-battle-page page-shell">
     <section className="eight-topbar"><div><span className="live-label"><i /> 本机团战进行中</span><h1>{match.title || "团战记分"}</h1><p>{match.players.length} 人在场 · {projection.rounds.length} 局 · {durationLabel(teamBattleElapsedMs(match))}{match.location ? ` · ${match.location}` : ""}</p></div><div><button aria-expanded={memberPanelOpen} onClick={() => setMemberPanelOpen(!memberPanelOpen)}>成员管理</button><button onClick={() => update(() => match.pausedAt ? resumeTeamBattleMatch(match) : pauseTeamBattleMatch(match), match.pausedAt ? "团战已继续" : "团战已暂停")}>{match.pausedAt ? "继续计时" : "暂停计时"}</button><button className="danger-text" onClick={onFinish}>结束团战</button></div></section>

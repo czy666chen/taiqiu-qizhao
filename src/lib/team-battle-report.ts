@@ -115,5 +115,5 @@ function roundRow(rows: string[], round: EffectiveTeamBattleRound, match: TeamBa
   const second = player(round.playerIds[1]);
   const winner = player(round.winnerId);
   const note = round.note ? ` · ${round.note.slice(0, 18)}` : "";
-  rows.push(`<rect x="50" y="${y}" width="800" height="52" rx="10" fill="${index % 2 ? palette.surfaceAlt : palette.surface}"/><text x="70" y="${y + 23}" class="strong">第 ${round.sequenceNo} 局 · ${escapeSvg(first.name)} vs ${escapeSvg(second.name)}</text><text x="70" y="${y + 43}" class="meta">${clockLabel(round.confirmedAt)} · ${escapeSvg(winner.name)} ${WIN_LABELS[round.winType]}${escapeSvg(note)}</text><text x="830" y="${y + 32}" text-anchor="end" class="score">${round.after[first.id] ?? 0} : ${round.after[second.id] ?? 0}</text>`);
+  rows.push(`<rect x="50" y="${y}" width="800" height="52" rx="10" fill="${index % 2 ? palette.surfaceAlt : palette.surface}"/><text x="70" y="${y + 23}" class="strong">第 ${index + 1} 局 · ${escapeSvg(first.name)} vs ${escapeSvg(second.name)}</text><text x="70" y="${y + 43}" class="meta">${clockLabel(round.confirmedAt)} · ${escapeSvg(winner.name)} ${WIN_LABELS[round.winType]}${escapeSvg(note)}</text><text x="830" y="${y + 32}" text-anchor="end" class="score">${round.after[first.id] ?? 0} : ${round.after[second.id] ?? 0}</text>`);
 }

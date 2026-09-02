@@ -38,6 +38,7 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM player_invites"),
     env.DB.prepare("DELETE FROM devices"),
     env.DB.prepare("DELETE FROM auth_audit_events"),
+    env.DB.prepare("DELETE FROM auth_rate_limits"),
     env.DB.prepare("DELETE FROM users"),
   ]);
 });
@@ -233,6 +234,28 @@ describe("R3 authentication HTTP API", () => {
     await expect(
       env.DB.prepare("SELECT count(*) AS count FROM sessions WHERE revoked_at IS NULL").first<number>("count"),
     ).resolves.toBe(10);
+  });
+
+  it("rejects a normal user session after its server-side expiry", async () => {
+    const registered = await register();
+    const cookie = cookieValue(registered);
+    await env.DB.prepare("UPDATE sessions SET expires_at = 0").run();
+
+    const response = await SELF.fetch("http://example.com/api/auth/me", { headers: { Cookie: cookie } });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ user: null, session: { authenticated: false } });
+  });
+
+  it("atomically caps concurrent failed logins", async () => {
+    await register();
+    const responses = await Promise.all(Array.from({ length: 20 }, () => post("/api/auth/login", {
+      username: "player01",
+      password: "wrong-password",
+    })));
+
+    expect(responses.filter((response) => response.status === 401)).toHaveLength(10);
+    expect(responses.filter((response) => response.status === 429)).toHaveLength(10);
   });
 
   it("rejects cross-origin writes before reading credentials", async () => {

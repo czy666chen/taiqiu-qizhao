@@ -119,19 +119,18 @@ async function registerDevice(request: Request, env: AuthEnv): Promise<Response>
   const deviceKey = stringField(body, "deviceKey", 128);
   const name = stringField(body, "name", 80);
   const now = Date.now();
-  const existing = await env.DB.prepare(
-    "SELECT id FROM devices WHERE user_id = ?1 AND device_key = ?2 AND revoked_at IS NULL",
-  ).bind(session.user.id, deviceKey).first<string>("id");
-  const id = existing ?? crypto.randomUUID();
-  if (existing) {
-    await env.DB.prepare("UPDATE devices SET name = ?1, last_seen_at = ?2 WHERE id = ?3 AND user_id = ?4")
-      .bind(name, now, id, session.user.id).run();
-  } else {
-    await env.DB.prepare(
-      "INSERT INTO devices (id, user_id, device_key, name, last_seen_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-    ).bind(id, session.user.id, deviceKey, name, now).run();
-  }
-  return json({ device: { id, deviceKey, name } }, existing ? 200 : 201);
+  const candidateId = crypto.randomUUID();
+  const device = await env.DB.prepare(
+    `INSERT INTO devices (id, user_id, device_key, name, last_seen_at)
+     VALUES (?1, ?2, ?3, ?4, ?5)
+     ON CONFLICT(user_id, device_key) DO UPDATE SET
+       name = excluded.name,
+       last_seen_at = excluded.last_seen_at
+     WHERE devices.revoked_at IS NULL
+     RETURNING id`,
+  ).bind(candidateId, session.user.id, deviceKey, name, now).first<{ id: string }>();
+  if (!device) return json({ error: "设备凭据已被撤销" }, 403);
+  return json({ device: { id: device.id, deviceKey, name } }, device.id === candidateId ? 201 : 200);
 }
 
 async function listHistory(request: Request, env: AuthEnv): Promise<Response> {

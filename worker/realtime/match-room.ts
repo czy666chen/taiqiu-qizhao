@@ -207,8 +207,9 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
   async addMember(input: RoomMember & { operationId: string; expectedVersion?: number }): Promise<RoomCommandResult> {
     const meta = this.meta();
     if (!meta) return { ok: false, code: "not_initialized", currentVersion: 0 };
-    const duplicate = this.eventByOperation(input.operationId);
-    if (duplicate) return { ok: true, duplicate: true, event: duplicate, version: meta.version };
+    const duplicate = this.duplicateResult(input.operationId, meta.version, input.userId, (event) =>
+      event.kind === "member.joined" && event.payload.userId === input.userId && event.payload.role === input.role);
+    if (duplicate) return duplicate;
     if (meta.status === "completed") return { ok: false, code: "invalid_command", currentVersion: meta.version };
     if (input.expectedVersion !== undefined && input.expectedVersion !== meta.version) {
       return { ok: false, code: "version_conflict", currentVersion: meta.version };
@@ -244,8 +245,9 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
   }): Promise<RoomCommandResult> {
     const meta = this.meta();
     if (!meta) return { ok: false, code: "not_initialized", currentVersion: 0 };
-    const duplicate = this.eventByOperation(input.operationId);
-    if (duplicate) return { ok: true, duplicate: true, event: duplicate, version: meta.version };
+    const duplicate = this.duplicateResult(input.operationId, meta.version, input.actorUserId, (event) =>
+      event.kind === "member.role_changed" && event.payload.userId === input.targetUserId && event.payload.role === input.role);
+    if (duplicate) return duplicate;
     if (meta.status === "completed") return { ok: false, code: "invalid_command", currentVersion: meta.version };
     if (input.expectedVersion !== meta.version) {
       return { ok: false, code: "version_conflict", currentVersion: meta.version };
@@ -279,8 +281,9 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
   }): Promise<RoomCommandResult> {
     const meta = this.meta();
     if (!meta) return { ok: false, code: "not_initialized", currentVersion: 0 };
-    const duplicate = this.eventByOperation(input.operationId);
-    if (duplicate) return { ok: true, duplicate: true, event: duplicate, version: meta.version };
+    const duplicate = this.duplicateResult(input.operationId, meta.version, input.actorUserId, (event) =>
+      event.kind === "member.left" && event.payload.userId === input.actorUserId);
+    if (duplicate) return duplicate;
     if (meta.status === "completed") return { ok: false, code: "invalid_command", currentVersion: meta.version };
     if (input.expectedVersion !== meta.version) {
       return { ok: false, code: "version_conflict", currentVersion: meta.version };
@@ -309,8 +312,9 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
   }): Promise<RoomCommandResult> {
     const meta = this.meta();
     if (!meta) return { ok: false, code: "not_initialized", currentVersion: 0 };
-    const duplicate = this.eventByOperation(input.operationId);
-    if (duplicate) return { ok: true, duplicate: true, event: duplicate, version: meta.version };
+    const duplicate = this.duplicateResult(input.operationId, meta.version, input.actorUserId, (event) =>
+      event.kind === "member.kicked" && event.payload.userId === input.targetUserId);
+    if (duplicate) return duplicate;
     if (meta.status === "completed") return { ok: false, code: "invalid_command", currentVersion: meta.version };
     if (input.expectedVersion !== meta.version) {
       return { ok: false, code: "version_conflict", currentVersion: meta.version };
@@ -353,8 +357,9 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
   }): Promise<RoomCommandResult> {
     const meta = this.meta();
     if (!meta) return { ok: false, code: "not_initialized", currentVersion: 0 };
-    const duplicate = this.eventByOperation(input.operationId);
-    if (duplicate) return { ok: true, duplicate: true, event: duplicate, version: meta.version };
+    const duplicate = this.duplicateResult(input.operationId, meta.version, input.actorUserId, (event) =>
+      (event.kind === "player.removed" || event.kind === "player.left") && event.payload.playerId === input.playerId);
+    if (duplicate) return duplicate;
     if (meta.status === "completed") return { ok: false, code: "invalid_command", currentVersion: meta.version };
     if (input.expectedVersion !== meta.version) {
       return { ok: false, code: "version_conflict", currentVersion: meta.version };
@@ -421,8 +426,9 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
   }): Promise<RoomCommandResult> {
     const meta = this.meta();
     if (!meta) return { ok: false, code: "not_initialized", currentVersion: 0 };
-    const duplicate = this.eventByOperation(input.operationId);
-    if (duplicate) return { ok: true, duplicate: true, event: duplicate, version: meta.version };
+    const duplicate = this.duplicateResult(input.operationId, meta.version, input.actorUserId, (event) =>
+      event.kind === "player.claimed" && event.payload.playerId === input.playerId && event.payload.userId === input.targetUserId);
+    if (duplicate) return duplicate;
     if (meta.status === "completed") return { ok: false, code: "invalid_command", currentVersion: meta.version };
     if (input.expectedVersion !== meta.version) {
       return { ok: false, code: "version_conflict", currentVersion: meta.version };
@@ -543,8 +549,9 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
   }): Promise<RoomCommandResult> {
     const meta = this.meta();
     if (!meta) return { ok: false, code: "not_initialized", currentVersion: 0 };
-    const duplicate = this.eventByOperation(input.operationId);
-    if (duplicate) return { ok: true, duplicate: true, event: duplicate, version: meta.version };
+    const duplicate = this.duplicateResult(input.operationId, meta.version, input.actorUserId, (event) =>
+      event.kind === "player.renamed" && event.payload.playerId === input.playerId && event.payload.nickname === input.nickname.trim().slice(0, 80));
+    if (duplicate) return duplicate;
     if (meta.status === "completed") return { ok: false, code: "invalid_command", currentVersion: meta.version };
     if (input.expectedVersion !== meta.version) return { ok: false, code: "version_conflict", currentVersion: meta.version };
     if (!input.operationId || input.operationId.length > 128) return { ok: false, code: "invalid_command", currentVersion: meta.version };
@@ -654,16 +661,18 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
   }): Promise<RoomCommandResult> {
     const meta = this.meta();
     if (!meta) return { ok: false, code: "not_initialized", currentVersion: 0 };
-    const duplicate = this.eventByOperation(input.operationId);
-    if (duplicate) {
+    const duplicate = this.duplicateResult(input.operationId, meta.version, input.actorUserId, (event) =>
+      event.kind === "room.completed");
+    if (duplicate?.ok) {
       return {
         ok: true,
         duplicate: true,
-        event: duplicate,
+        event: duplicate.event,
         version: meta.version,
         archivePending: this.archiveState()?.status !== "archived",
       };
     }
+    if (duplicate) return duplicate;
     if (meta.status === "completed") return { ok: false, code: "invalid_command", currentVersion: meta.version };
     if (input.expectedVersion !== meta.version) {
       return { ok: false, code: "version_conflict", currentVersion: meta.version };
@@ -711,8 +720,8 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
   }): RoomCommandResult {
     const meta = this.meta();
     if (!meta) return { ok: false, code: "not_initialized", currentVersion: 0 };
-    const duplicate = this.eventByOperation(input.operationId);
-    if (duplicate) return { ok: true, duplicate: true, event: duplicate, version: meta.version };
+    const duplicate = this.duplicateResult(input.operationId, meta.version, input.actorUserId);
+    if (duplicate) return duplicate;
     if (meta.status === "completed") return { ok: false, code: "invalid_command", currentVersion: meta.version };
     if (input.expectedVersion !== meta.version) {
       return { ok: false, code: "version_conflict", currentVersion: meta.version };
@@ -835,9 +844,11 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
     }
     let body: Record<string, unknown>;
     try {
-      body = JSON.parse(message) as Record<string, unknown>;
+      const parsed: unknown = JSON.parse(message);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid");
+      body = parsed as Record<string, unknown>;
     } catch {
-      ws.send(JSON.stringify({ type: "error", error: "消息不是有效 JSON" }));
+      ws.send(JSON.stringify({ type: "error", error: "消息不是有效 JSON 对象" }));
       return;
     }
     if (body.type === "sync") {
@@ -865,7 +876,10 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
       kind: typeof body.kind === "string" ? body.kind : "",
       payload,
     });
-    ws.send(JSON.stringify({ type: "command-result", result }));
+    const clientResult = result.ok
+      ? { ...result, event: this.projectEvent(result.event, { userId: attachment.userId, role: attachment.role }) }
+      : result;
+    ws.send(JSON.stringify({ type: "command-result", result: clientResult }));
     if (result.ok && !result.duplicate) {
       if (result.event.kind.startsWith("card.")) this.broadcastView((observer) => ({ type: "event", event: this.projectEvent(result.event, observer), version: result.version }), ws);
       else this.broadcast({ type: "event", event: result.event, version: result.version }, ws);
@@ -896,6 +910,19 @@ export class MatchRoom extends DurableObject<MatchRoomEnv> {
       created_at: number;
     }>("SELECT * FROM room_events WHERE operation_id = ?", operationId).toArray()[0];
     return row ? this.toEvent(row) : undefined;
+  }
+
+  private duplicateResult(
+    operationId: string,
+    currentVersion: number,
+    actorUserId: string,
+    matches: (event: RoomEvent) => boolean = () => true,
+  ): RoomCommandResult | undefined {
+    const event = this.eventByOperation(operationId);
+    if (!event) return undefined;
+    return event.actorUserId === actorUserId && matches(event)
+      ? { ok: true, duplicate: true, event, version: currentVersion }
+      : { ok: false, code: "invalid_command", currentVersion };
   }
 
   private member(userId: string): { userId: string; nickname: string; role: RoomRole; joinedAt: number } | undefined {

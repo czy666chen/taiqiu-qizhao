@@ -93,8 +93,10 @@ const worker = {
       env.DB.prepare("DELETE FROM sync_receipts WHERE received_at < ?1").bind(now - 30 * 24 * 60 * 60 * 1000),
       env.DB.prepare("DELETE FROM auth_audit_events WHERE created_at < ?1").bind(now - 180 * 24 * 60 * 60 * 1000),
       env.DB.prepare("DELETE FROM admin_audit_events WHERE created_at < ?1").bind(now - 180 * 24 * 60 * 60 * 1000),
+      env.DB.prepare("DELETE FROM auth_rate_limits WHERE window_started_at < ?1").bind(now - 24 * 60 * 60 * 1000),
       env.DB.prepare("DELETE FROM match_audit_events WHERE created_at < ?1").bind(now - 180 * 24 * 60 * 60 * 1000),
-      env.DB.prepare("DELETE FROM sessions WHERE revoked_at IS NOT NULL AND revoked_at < ?1").bind(now - 30 * 24 * 60 * 60 * 1000),
+      env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?1 OR (revoked_at IS NOT NULL AND revoked_at < ?2)")
+        .bind(now, now - 30 * 24 * 60 * 60 * 1000),
       env.DB.prepare("DELETE FROM admin_sessions WHERE expires_at < ?1 OR (revoked_at IS NOT NULL AND revoked_at < ?2)")
         .bind(now, now - 30 * 24 * 60 * 60 * 1000),
     ]));

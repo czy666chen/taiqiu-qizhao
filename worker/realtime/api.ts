@@ -15,6 +15,7 @@ import {
 } from "../../src/lib/team-battle";
 import { createRealtimeSnookerState, type RealtimeSnookerState } from "./snooker-scoring";
 import type { RealtimeTeamBattleState } from "./team-battle-scoring";
+import { JsonBodyError, readJsonObject } from "../http/read-json";
 
 export type RealtimeEnv = AuthEnv & {
   MATCH_ROOM: DurableObjectNamespace<MatchRoom>;
@@ -136,12 +137,12 @@ function requireSameOrigin(request: Request): void {
 }
 
 async function readJson(request: Request): Promise<Record<string, unknown>> {
-  if (request.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") {
-    throw new RealtimeValidationError("请求必须使用 application/json");
+  try {
+    return await readJsonObject(request, 64 * 1024);
+  } catch (error) {
+    if (error instanceof JsonBodyError) throw new RealtimeValidationError(error.message);
+    throw error;
   }
-  const value: unknown = await request.json();
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new RealtimeValidationError("请求体无效");
-  return value as Record<string, unknown>;
 }
 
 function uuid(value: unknown, field: string): string {
@@ -1103,6 +1104,7 @@ async function claimSeat(
   env: RealtimeEnv,
   roomCode: string,
   playerId: string,
+  context: RealtimeRequestContext,
 ): Promise<Response> {
   requireSameOrigin(request);
   const session = await requireSession(env, request);
@@ -1130,15 +1132,14 @@ async function claimSeat(
   // The seat row deliberately stays user_id NULL (a temporary seat): binding
   // user_id here would break the host's later "remove without history" path.
   const nickname = result.event.payload.nickname;
-  if (typeof nickname === "string" && nickname) {
-    try {
-      await env.DB.prepare(
-        "UPDATE match_players SET nickname_snapshot = ?1 WHERE id = ?2 AND match_id = ?3",
-      ).bind(nickname, playerId, room.match_id).run();
-    } catch {
-      // The DO is authoritative for the live room; a transient D1 write only
-      // affects the archived nickname and is retried on the next command.
-    }
+  if (typeof nickname === "string" && nickname && !(await convergePlayerName(env, room.match_id, playerId, nickname))) {
+    return json({
+      error: "席位已绑定，云端归档状态正在同步；请重试",
+      requestId: context.requestId,
+      retryable: true,
+      operationId: requestOperationId,
+      room: { code: roomCode, matchId: room.match_id },
+    }, 503);
   }
   return commandResponse(result);
 }
@@ -1304,7 +1305,7 @@ export async function handleRealtimeApiRequest(request: Request, env: RealtimeEn
     }
     const claim = pathname.match(/^\/api\/realtime\/rooms\/([23456789A-HJ-NP-Z]{6})\/players\/([0-9a-f-]{36})\/claim$/i);
     if (!response && claim && request.method === "POST") {
-      response = await claimSeat(request, env, claim[1].toUpperCase(), uuid(claim[2], "playerId"));
+      response = await claimSeat(request, env, claim[1].toUpperCase(), uuid(claim[2], "playerId"), context);
     }
     const rename = pathname.match(/^\/api\/realtime\/rooms\/([23456789A-HJ-NP-Z]{6})\/players\/([0-9a-f-]{36})\/name$/i);
     if (!response && rename && request.method === "PATCH") {

@@ -42,6 +42,7 @@ beforeEach(async () => {
     env.DB.prepare("DELETE FROM player_invites"),
     env.DB.prepare("DELETE FROM devices"),
     env.DB.prepare("DELETE FROM auth_audit_events"),
+    env.DB.prepare("DELETE FROM auth_rate_limits"),
     env.DB.prepare("DELETE FROM users"),
   ]);
 });
@@ -84,6 +85,19 @@ async function device(account: Account, key: string): Promise<string> {
 }
 
 describe("R3 business authorization and cloud APIs", () => {
+  it("converges concurrent registration of the same device", async () => {
+    const account = await register("device_owner");
+    const responses = await Promise.all(Array.from({ length: 4 }, () => write("/api/devices", account.cookie, {
+      deviceKey: "same-browser-key",
+      name: "同一浏览器",
+    })));
+    const payloads = await Promise.all(responses.map((response) => response.json() as Promise<{ device: { id: string } }>));
+
+    expect(responses.every((response) => response.ok)).toBe(true);
+    expect(new Set(payloads.map((payload) => payload.device.id)).size).toBe(1);
+    await expect(env.DB.prepare("SELECT count(*) AS count FROM devices").first<number>("count")).resolves.toBe(1);
+  });
+
   it("requires a session for business collections and does not enumerate account data", async () => {
     const a = await register("account_a");
     const b = await register("account_b");

@@ -8,6 +8,8 @@ import {
   verifySecret,
 } from "../auth/core";
 import { getTeamBattleProjection, isTeamBattleMatch } from "../../src/lib/team-battle";
+import { JsonBodyError, readJsonObject } from "../http/read-json";
+import { clearRateLimit, reserveRateLimit } from "../auth/rate-limit";
 
 const ADMIN_COOKIE_NAME = "__Host-hei8_admin_session";
 const MAX_JSON_BYTES = 16 * 1024;
@@ -58,23 +60,11 @@ function normalizeAdminUsername(input: unknown): { normalized: string; display: 
 }
 
 async function readJson(request: Request): Promise<Record<string, unknown>> {
-  if (request.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") {
-    throw new AuthValidationError("请求必须使用 application/json", "request");
-  }
-  const declaredLength = Number(request.headers.get("Content-Length") ?? 0);
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_JSON_BYTES) {
-    throw new AuthValidationError("请求体过大", "request");
-  }
-  const text = await request.text();
-  if (new TextEncoder().encode(text).byteLength > MAX_JSON_BYTES) {
-    throw new AuthValidationError("请求体过大", "request");
-  }
   try {
-    const parsed: unknown = JSON.parse(text);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
-    return parsed as Record<string, unknown>;
-  } catch {
-    throw new AuthValidationError("请求体不是有效 JSON 对象", "request");
+    return await readJsonObject(request, MAX_JSON_BYTES);
+  } catch (error) {
+    if (error instanceof JsonBodyError) throw new AuthValidationError(error.message, "request");
+    throw error;
   }
 }
 
@@ -113,15 +103,6 @@ async function audit(
   ).bind(crypto.randomUUID(), adminUserId, action, outcome, requestId, JSON.stringify(metadata)).run();
 }
 
-async function isRateLimited(env: AdminEnv, normalizedUsername: string): Promise<boolean> {
-  const count = await env.DB.prepare(
-    `SELECT count(*) AS count FROM admin_audit_events
-      WHERE action = 'login' AND outcome = 'failure' AND created_at >= ?1
-        AND json_extract(metadata_json, '$.normalized_username') = ?2`,
-  ).bind(Date.now() - LOGIN_FAILURE_WINDOW_MS, normalizedUsername).first<number>("count");
-  return (count ?? 0) >= LOGIN_FAILURE_LIMIT;
-}
-
 export async function findAdminSession(env: AdminEnv, request: Request): Promise<AdminSession | null> {
   const token = parseCookie(request.headers.get("Cookie"), ADMIN_COOKIE_NAME);
   if (!token) return null;
@@ -147,7 +128,8 @@ async function login(request: Request, env: AdminEnv, requestId: string): Promis
   const body = await readJson(request);
   const { normalized } = normalizeAdminUsername(body.username);
   const password = validatePassword(body.password);
-  if (await isRateLimited(env, normalized)) return json({ error: "尝试次数过多，请稍后再试" }, 429);
+  const rateLimit = await reserveRateLimit(env, request, "admin-login", normalized, LOGIN_FAILURE_LIMIT, LOGIN_FAILURE_WINDOW_MS);
+  if (!rateLimit.allowed) return json({ error: "尝试次数过多，请稍后再试" }, 429);
 
   const admin = await env.DB.prepare(
     `SELECT id, normalized_username, display_username, password_digest, status
@@ -176,6 +158,7 @@ async function login(request: Request, env: AdminEnv, requestId: string): Promis
        VALUES (?1, ?2, 'login', 'success', ?3, '{}')`,
     ).bind(crypto.randomUUID(), admin.id, requestId),
   ]);
+  await clearRateLimit(env, rateLimit.key);
   return json(
     { admin: { id: admin.id, username: admin.display_username }, session: { authenticated: true } },
     200,
@@ -769,7 +752,7 @@ async function userDetail(request: Request, env: AdminEnv, userId: string): Prom
               u.status, u.created_at, u.updated_at, u.deleted_at,
               u.password_reset_at,
               (SELECT count(*) FROM sessions s
-                WHERE s.user_id = u.id AND s.revoked_at IS NULL) AS active_session_count,
+                WHERE s.user_id = u.id AND s.revoked_at IS NULL AND s.expires_at > unixepoch() * 1000) AS active_session_count,
               (SELECT count(*) FROM (
                  SELECT m.id FROM matches m WHERE m.owner_user_id = u.id
                  UNION

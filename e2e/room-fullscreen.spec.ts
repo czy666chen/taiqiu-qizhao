@@ -58,6 +58,41 @@ function teamBattleSnapshot(role: "host" | "spectator" = "host") {
   };
 }
 
+function teamBattleSnapshotWithNonRoundEvent() {
+  const snapshot = teamBattleSnapshot() as unknown as {
+    version: number;
+    teamBattle: { match: { events: Array<Record<string, unknown>> } };
+  };
+  const startedAt = 1_788_000_000_000;
+  snapshot.version = 3;
+  snapshot.teamBattle.match.events.push(
+    {
+      id: "pause-1",
+      sequenceNo: 2,
+      type: "pause",
+      occurredAt: startedAt + 20,
+      playerNames: { "team-a": "阿杰", "team-b": "老王" },
+    },
+    {
+      id: "round-2",
+      sequenceNo: 3,
+      type: "round",
+      occurredAt: startedAt + 30,
+      playerNames: { "team-a": "阿杰", "team-b": "老王" },
+      round: {
+        playerIds: ["team-a", "team-b"],
+        winnerId: "team-b",
+        winType: "break_clear",
+        fouls: { "team-a": 1, "team-b": 0 },
+        note: "恢复后第二局",
+        startedAt: startedAt + 21,
+        confirmedAt: startedAt + 30,
+      },
+    },
+  );
+  return snapshot;
+}
+
 test.describe("多人实时房间全屏化", () => {
   test("首页不再内嵌房间面板，提供进入 /room 的入口", async ({ page }) => {
     await page.goto("/");
@@ -76,6 +111,19 @@ test.describe("多人实时房间全屏化", () => {
   test("/room/:code 路径可直达全屏房间页外壳", async ({ page }) => {
     await page.goto("/room/ABC234");
     await expect(page.getByRole("heading", { name: "多人实时房间" })).toBeVisible();
+  });
+
+  test("团战流水局号不受暂停等非对局事件影响", async ({ page }) => {
+    await page.route("**/api/auth/me", (route) => route.fulfill({ json: { user: { id: "user-1", username: "tester", publicCode: "TEST0001", nickname: "测试房主", avatarUrl: null } } }));
+    await page.route("**/api/history", (route) => route.fulfill({ json: { matches: [] } }));
+    await page.route("**/api/realtime/rooms/ABC234", (route) => route.fulfill({ json: { snapshot: teamBattleSnapshotWithNonRoundEvent(), kicked: [] } }));
+    await page.routeWebSocket("**/api/realtime/rooms/ABC234/connect**", () => {});
+
+    await page.goto("/room/ABC234");
+
+    const latestRound = page.locator(".team-pair-ledger article").first();
+    await expect(latestRound.getByText("第 2 局", { exact: true })).toBeVisible();
+    await expect(latestRound.getByText("第 3 局", { exact: true })).toHaveCount(0);
   });
 
   test("登录房主可直接创建实时团战，移动端计分并在只读角色下禁用写操作", async ({ page }) => {

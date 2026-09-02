@@ -11,6 +11,7 @@ import {
   verifySecret,
 } from "./core";
 import { findSession, requireSession, type SessionUser } from "./session";
+import { clearRateLimit, reserveRateLimit } from "./rate-limit";
 
 const MAX_JSON_BYTES = 16 * 1024;
 const SESSION_MAX_AGE_SECONDS = 400 * 24 * 60 * 60;
@@ -46,6 +47,7 @@ function userJson(user: SessionUser) {
     publicCode: user.public_code,
     nickname: user.nickname,
     avatarUrl: user.avatar_url,
+    mustChangePassword: user.password_reset_at !== null,
   };
 }
 
@@ -134,28 +136,15 @@ async function audit(
     .run();
 }
 
-async function isRateLimited(env: AuthEnv, action: string, normalizedUsername: string): Promise<boolean> {
-  const count = await env.DB.prepare(
-    `SELECT count(*) AS count
-       FROM auth_audit_events
-      WHERE action = ?1
-        AND outcome = 'failure'
-        AND created_at >= ?2
-        AND json_extract(metadata_json, '$.normalized_username') = ?3`,
-  )
-    .bind(action, Date.now() - LOGIN_FAILURE_WINDOW_MS, normalizedUsername)
-    .first<number>("count");
-  return (count ?? 0) >= LOGIN_FAILURE_LIMIT;
-}
-
 async function createSession(env: AuthEnv, userId: string): Promise<{ token: string; statement: D1PreparedStatement }> {
   const token = generateSessionToken();
   const digest = await digestSession(env.SESSION_HMAC_KEY, token);
+  const expiresAt = Date.now() + SESSION_MAX_AGE_SECONDS * 1000;
   return {
     token,
     statement: env.DB.prepare(
-      "INSERT INTO sessions (id, user_id, token_digest) VALUES (?1, ?2, ?3)",
-    ).bind(crypto.randomUUID(), userId, digest),
+      "INSERT INTO sessions (id, user_id, token_digest, expires_at) VALUES (?1, ?2, ?3, ?4)",
+    ).bind(crypto.randomUUID(), userId, digest, expiresAt),
   };
 }
 
@@ -179,7 +168,8 @@ async function register(request: Request, env: AuthEnv, requestId: string): Prom
   const nickname = validateNickname(body.nickname, display);
   const inviteCode = typeof body.inviteCode === "string" ? body.inviteCode : "";
 
-  if (await isRateLimited(env, "register", normalized)) return json({ error: "请求过于频繁，请稍后再试" }, 429);
+  const rateLimit = await reserveRateLimit(env, request, "register", normalized, LOGIN_FAILURE_LIMIT, LOGIN_FAILURE_WINDOW_MS);
+  if (!rateLimit.allowed) return json({ error: "请求过于频繁，请稍后再试" }, 429);
   if (!(await verifySecret(inviteCode, env.REGISTRATION_INVITE_CODE))) {
     await audit(env, "register", "failure", requestId, null, { normalized_username: normalized });
     return json({ error: "邀请码无效" }, 403);
@@ -217,6 +207,8 @@ async function register(request: Request, env: AuthEnv, requestId: string): Prom
     throw error;
   }
 
+  await clearRateLimit(env, rateLimit.key);
+
   return json(
     { user: userJson({
       id: userId,
@@ -224,6 +216,7 @@ async function register(request: Request, env: AuthEnv, requestId: string): Prom
       display_username: display,
       password_digest: passwordDigest,
       password_version: 1,
+      password_reset_at: null,
       status: "active",
       public_code: publicCode,
       nickname,
@@ -239,11 +232,12 @@ async function login(request: Request, env: AuthEnv, requestId: string): Promise
   const body = await readJson(request);
   const { normalized } = normalizeUsername(body.username);
   const password = validatePassword(body.password);
-  if (await isRateLimited(env, "login", normalized)) return json({ error: "请求过于频繁，请稍后再试" }, 429);
+  const rateLimit = await reserveRateLimit(env, request, "login", normalized, LOGIN_FAILURE_LIMIT, LOGIN_FAILURE_WINDOW_MS);
+  if (!rateLimit.allowed) return json({ error: "请求过于频繁，请稍后再试" }, 429);
 
   const user = await env.DB.prepare(
     `SELECT u.id, u.normalized_username, u.display_username, u.password_digest,
-            u.password_version, u.status, p.public_code, p.nickname, p.avatar_url
+            u.password_version, u.password_reset_at, u.status, p.public_code, p.nickname, p.avatar_url
        FROM users u JOIN profiles p ON p.user_id = u.id
       WHERE u.normalized_username = ?1`,
   )
@@ -265,7 +259,11 @@ async function login(request: Request, env: AuthEnv, requestId: string): Promise
     ).bind(crypto.randomUUID(), user.id, requestId),
     trimSessionsStatement(env, user.id),
   ]);
-  return json({ user: userJson(user), session: { authenticated: true } }, 200, {
+  await clearRateLimit(env, rateLimit.key);
+  return json({
+    user: userJson(user),
+    session: { authenticated: true, mustChangePassword: user.password_reset_at !== null },
+  }, 200, {
     "Set-Cookie": sessionCookie(token),
   });
 }
@@ -278,7 +276,10 @@ async function me(request: Request, env: AuthEnv): Promise<Response> {
   )
     .bind(Date.now(), session.tokenDigest, Date.now() - 5 * 60 * 1000)
     .run();
-  return json({ user: userJson(session.user), session: { authenticated: true } });
+  return json({
+    user: userJson(session.user),
+    session: { authenticated: true, mustChangePassword: session.user.password_reset_at !== null },
+  });
 }
 
 async function logout(request: Request, env: AuthEnv, requestId: string): Promise<Response> {
@@ -298,7 +299,7 @@ async function logout(request: Request, env: AuthEnv, requestId: string): Promis
 
 async function changePassword(request: Request, env: AuthEnv, requestId: string): Promise<Response> {
   requireSameOrigin(request);
-  const session = await requireSession(env, request);
+  const session = await requireSession(env, request, true);
   const body = await readJson(request);
   const currentPassword = validatePassword(body.currentPassword);
   const newPassword = validatePassword(body.newPassword);
@@ -319,7 +320,9 @@ async function changePassword(request: Request, env: AuthEnv, requestId: string)
   );
   const { token, statement } = await createSession(env, session.user.id);
   await env.DB.batch([
-    env.DB.prepare("UPDATE users SET password_digest = ?1, updated_at = ?2 WHERE id = ?3")
+    env.DB.prepare(
+      "UPDATE users SET password_digest = ?1, password_version = password_version + 1, password_reset_at = NULL, updated_at = ?2 WHERE id = ?3",
+    )
       .bind(newDigest, Date.now(), session.user.id),
     env.DB.prepare("DELETE FROM sessions WHERE user_id = ?1").bind(session.user.id),
     statement,
